@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+venv/
+.env
+*.db
+*.db-wal
+*.db-shm
+metrics.json
+bot.log
+.pytest_cache/
