@@ -77,7 +77,7 @@ class Config:
         default_factory=lambda: TunableParam(value=0.85, min_val=0.70, max_val=0.95)
     )
     max_price: TunableParam = field(
-        default_factory=lambda: TunableParam(value=0.25, min_val=0.10, max_val=0.40)
+        default_factory=lambda: TunableParam(value=0.65, min_val=0.30, max_val=0.85)
     )
     bet_pct: TunableParam = field(
         default_factory=lambda: TunableParam(value=0.05, min_val=0.02, max_val=0.10)
@@ -107,6 +107,12 @@ class Config:
     max_single_market_exposure: float = 0.35  # 35% of portfolio
     max_total_deployed: float = 0.75  # 75% of portfolio
     liquidity_cap: float = 0.80  # never take >80% of visible depth
+
+    # Signal detection gates
+    min_price: float = 0.30               # Don't buy YES tokens below this (market too uncertain)
+    metar_max_age_minutes: float = 30.0   # METAR must be fresher than this
+    geq_min_hour: int = 12                # Earliest local hour for geq signals (noon)
+    leq_min_hour: int = 17                # Earliest local hour for leq signals (after peak heating)
 
     # Circuit breaker
     consecutive_loss_limit: int = 4

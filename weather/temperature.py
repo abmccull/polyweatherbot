@@ -145,26 +145,26 @@ def temp_hits_bucket(
 
 
 def _margin_confidence(margin: float, has_tenths: bool) -> float:
-    """Compute confidence based on margin from boundary and precision.
+    """Compute base confidence from margin alone.
 
     Margin = distance from the rounding boundary, normalized to °C-equivalent.
     Positive margin means safely inside the bucket.
+
+    NOTE: Precision bonus is NOT applied here — it lives in confidence.py
+    to avoid double-counting.
     """
-    base = 0.50
+    base = 0.40
 
-    # Precision bonus
-    if has_tenths:
+    if margin > 2.0:
+        base += 0.20
+    elif margin > 1.0:
         base += 0.15
-
-    # Margin-based adjustments
-    if margin > 1.0:
-        base += 0.25
     elif margin > 0.5:
-        base += 0.15
+        base += 0.10
     elif margin > 0.2:
         base += 0.05
     elif margin < 0.1:
-        base -= 0.15
+        base -= 0.10
 
     return max(0.0, min(1.0, base))
 
