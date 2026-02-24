@@ -47,12 +47,18 @@ class Trade(Base):
 
     # Trade execution
     action = Column(String, nullable=False, default="BUY", index=True)
+    requested_size = Column(Float, nullable=True)
+    requested_cost = Column(Float, nullable=True)
     price = Column(Float, nullable=False)
     size = Column(Float, nullable=False)
     cost = Column(Float, nullable=False)
     order_id = Column(String, nullable=True)
     order_status = Column(String, nullable=True)
     fill_price = Column(Float, nullable=True)
+    expected_edge = Column(Float, nullable=True)
+    expected_profit = Column(Float, nullable=True)
+    expected_slippage = Column(Float, nullable=True)
+    calibrated_probability = Column(Float, nullable=True)
 
     # Fee tracking
     fee_paid = Column(Float, nullable=True, default=0.0)
@@ -66,7 +72,7 @@ class Trade(Base):
     local_hour = Column(Integer, nullable=True)
 
     # Exit management
-    exit_reason = Column(String, nullable=True)      # "PROFIT_LOCK", "TRAILING_STOP"
+    exit_reason = Column(String, nullable=True)      # "PROFIT_LOCK", "TRAILING_STOP", "STOP_LOSS"
     parent_trade_id = Column(Integer, nullable=True)  # Links SELL to original BUY token
 
     # Resolution (filled after market resolves)
@@ -107,6 +113,45 @@ class MarketSnapshot(Base):
     best_bid = Column(Float, nullable=True)
     best_ask = Column(Float, nullable=True)
     captured_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SignalCandidate(Base):
+    __tablename__ = "signal_candidates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_id = Column(String, nullable=False, index=True)
+    token_id = Column(String, nullable=False, index=True)
+    city = Column(String, nullable=False)
+    market_date = Column(String, nullable=False)
+    market_type = Column(String, nullable=True, default="temperature")
+    bucket_type = Column(String, nullable=False)
+    bucket_value = Column(Integer, nullable=False)
+    bucket_unit = Column(String, nullable=True, default="C")
+
+    metar_temp_c = Column(Float, nullable=True)
+    metar_precision = Column(String, nullable=True)
+    metar_age_minutes = Column(Float, nullable=True)
+    local_hour = Column(Integer, nullable=True)
+    matched_bucket = Column(Boolean, nullable=True)
+
+    best_bid = Column(Float, nullable=True)
+    best_ask = Column(Float, nullable=True)
+    spread = Column(Float, nullable=True)
+    bid_depth = Column(Float, nullable=True)
+    ask_depth = Column(Float, nullable=True)
+
+    confidence_total = Column(Float, nullable=True)
+    calibrated_probability = Column(Float, nullable=True)
+    confidence_base = Column(Float, nullable=True)
+    confidence_precision_bonus = Column(Float, nullable=True)
+    confidence_peak_bonus = Column(Float, nullable=True)
+    confidence_recency_bonus = Column(Float, nullable=True)
+    confidence_historical_blend = Column(Float, nullable=True)
+    confidence_calibration_adj = Column(Float, nullable=True)
+
+    status = Column(String, nullable=False)  # "EMITTED", "NO_PRICE", etc.
+    reason = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class ParameterAdjustment(Base):

@@ -20,7 +20,11 @@ class OpenMeteoClient:
         self._client = httpx.AsyncClient(timeout=30.0)
 
     async def get_daily_tmax(
-        self, latitude: float, longitude: float, for_date: date,
+        self,
+        latitude: float,
+        longitude: float,
+        for_date: date,
+        timezone: str = "UTC",
     ) -> float | None:
         """Fetch daily maximum temperature in Celsius for a specific date.
 
@@ -28,6 +32,7 @@ class OpenMeteoClient:
             latitude: Station latitude
             longitude: Station longitude
             for_date: The date to query
+            timezone: IANA timezone used for daily aggregation boundaries
 
         Returns:
             Daily max temperature in Celsius, or None on error/no data.
@@ -39,7 +44,7 @@ class OpenMeteoClient:
             "start_date": date_str,
             "end_date": date_str,
             "daily": "temperature_2m_max",
-            "timezone": "UTC",
+            "timezone": timezone,
         }
 
         try:

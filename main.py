@@ -15,6 +15,7 @@ from learning.calibrator import ConfidenceCalibrator
 from learning.optimizer import ParameterOptimizer, restore_tunable_params
 from learning.tracker import TradeTracker
 from markets.discovery import MarketDiscovery
+from markets.realtime import ClobMarketFeed
 from markets.registry import MarketRegistry
 from settlement.noaa import NOAAClient
 from settlement.open_meteo import OpenMeteoClient
@@ -22,6 +23,7 @@ from signals.detector import SignalDetector
 from trading.executor import TradeExecutor
 from trading.portfolio import Portfolio
 from trading.position_manager import PositionManager
+from trading.reconciliation import ExecutionReconciler
 from trading.redeemer import PositionRedeemer
 from utils.logging import setup_logging, get_logger
 from weather.metar_feed import MetarFeed
@@ -56,6 +58,8 @@ class StationSniper:
         self.position_manager = PositionManager(self.executor, config)
         self.redeemer = PositionRedeemer(config)
         self.optimizer = ParameterOptimizer(config, self.tracker)
+        self.market_feed = ClobMarketFeed(config)
+        self.reconciler = ExecutionReconciler(config)
 
     async def start(self) -> None:
         """Start all loops."""
@@ -87,6 +91,11 @@ class StationSniper:
             temp_markets=self.registry.count,
         )
 
+        # Start realtime market/user streams (optional; falls back gracefully).
+        self._sync_realtime_tokens()
+        await self.market_feed.start()
+        await self.reconciler.start()
+
         self._running = True
 
         # Run concurrent loops
@@ -109,6 +118,7 @@ class StationSniper:
             try:
                 await asyncio.sleep(self.config.market_scan_interval)
                 await self.registry.refresh()
+                self._sync_realtime_tokens()
                 log.info(
                     "market_scan_complete",
                     temp_markets=self.registry.count,
@@ -174,14 +184,36 @@ class StationSniper:
 
     async def _refresh_prices(self) -> None:
         """Refresh order book prices for all active bucket tokens."""
-        if self.config.dry_run and self.executor._clob_client is None:
-            return
-
+        market_feed = getattr(self, "market_feed", None)
         # Temperature markets
         for active in self.registry.get_all_active():
             for bucket in active.market.buckets:
-                bid, ask, bid_depth, ask_depth = self.executor.refresh_prices(bucket.token_id)
+                bid = ask = None
+                bid_depth = ask_depth = 0.0
+
+                # Prefer websocket snapshot when fresh; fall back to REST order book.
+                if market_feed is not None and market_feed.is_fresh(
+                    bucket.token_id, self.config.market_price_max_age,
+                ):
+                    ws_price = market_feed.get_price(bucket.token_id)
+                    if ws_price is not None:
+                        bid = ws_price.best_bid
+                        ask = ws_price.best_ask
+                        bid_depth = ws_price.bid_depth
+                        ask_depth = ws_price.ask_depth
+
+                if bid is None and ask is None:
+                    bid, ask, bid_depth, ask_depth = self.executor.refresh_prices(bucket.token_id)
+
                 self.registry.update_prices(bucket.token_id, bid, ask, bid_depth, ask_depth)
+
+    def _sync_realtime_tokens(self) -> None:
+        """Push current registry token universe into websocket subscription."""
+        token_ids: list[str] = []
+        for active in self.registry.get_all_active():
+            for bucket in active.market.buckets:
+                token_ids.append(bucket.token_id)
+        self.market_feed.set_tokens(token_ids)
 
     async def _redemption_loop(self) -> None:
         """Check for and redeem winning positions every 5 minutes."""
@@ -223,6 +255,9 @@ class StationSniper:
                 calibration = self.calibrator.calibrate()
                 if calibration:
                     log.info("calibration_complete", bands=len(calibration))
+                model_diag = self.calibrator.get_model_diagnostics()
+                if model_diag is not None:
+                    log.info("calibration_model", **model_diag)
 
                 # Update portfolio outcomes for circuit breaker
                 stats = self.tracker.get_stats(lookback_days=1)
@@ -278,11 +313,12 @@ class StationSniper:
                     self.tracker,
                     self.position_manager,
                     active_markets=self.registry.count,
+                    calibrator=self.calibrator,
                 )
             except asyncio.CancelledError:
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("heartbeat_failed", error=str(e))
 
     async def _shutdown(self) -> None:
         """Graceful shutdown: close connections, flush DB."""
@@ -292,6 +328,8 @@ class StationSniper:
         await self.noaa_client.close()
         await self.open_meteo.close()
         await self.redeemer.close()
+        await self.market_feed.stop()
+        await self.reconciler.stop()
         await self.metar_feed.close()
         await self.synoptic_feed.close()
         await self.nws_feed.close()

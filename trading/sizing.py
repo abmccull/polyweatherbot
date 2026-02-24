@@ -2,10 +2,76 @@
 
 from __future__ import annotations
 
+import math
+
 from config import Config
 from utils.logging import get_logger
 
 log = get_logger("sizing")
+
+
+def _wilson_lower_bound(win_rate: float, samples: int, z: float) -> float:
+    """Conservative lower bound for win rate with finite samples."""
+    if samples <= 0:
+        return 0.0
+    p = max(0.0, min(1.0, win_rate))
+    n = float(samples)
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = p + z2 / (2.0 * n)
+    margin = z * math.sqrt((p * (1.0 - p) / n) + (z2 / (4.0 * n * n)))
+    return max(0.0, (center - margin) / denom)
+
+
+def aggression_multiplier(
+    config: Config,
+    win_rate: float | None,
+    samples: int,
+    portfolio_value: float,
+    peak_value: float,
+) -> float:
+    """Scale aggressiveness only when performance is statistically strong."""
+    if not config.aggression_enabled:
+        return 1.0
+    if win_rate is None or samples < config.aggression_min_samples:
+        return 1.0
+    if peak_value > 0 and portfolio_value > 0:
+        drawdown = 1.0 - (portfolio_value / peak_value)
+        if drawdown >= config.aggression_drawdown_guard:
+            return 1.0
+
+    lb = _wilson_lower_bound(win_rate, samples, config.aggression_confidence_z)
+    if lb <= config.aggression_target_win_rate:
+        return 1.0
+
+    headroom = max(1e-6, 1.0 - config.aggression_target_win_rate)
+    normalized = min(1.0, (lb - config.aggression_target_win_rate) / headroom)
+    return 1.0 + (normalized * config.aggression_max_boost)
+
+
+def effective_max_bet(
+    config: Config,
+    portfolio_value: float,
+    performance_win_rate: float | None = None,
+    performance_samples: int = 0,
+    peak_value: float = 0.0,
+) -> float:
+    """Compute dynamic max bet with optional performance-based expansion."""
+    max_bet = config.max_bet
+    if config.dynamic_max_bet_enabled:
+        max_bet = max(config.dynamic_max_bet_floor, portfolio_value * config.dynamic_max_bet_pct)
+        if config.dynamic_max_bet_cap > 0:
+            max_bet = min(max_bet, config.dynamic_max_bet_cap)
+
+    boost = aggression_multiplier(
+        config=config,
+        win_rate=performance_win_rate,
+        samples=performance_samples,
+        portfolio_value=portfolio_value,
+        peak_value=peak_value,
+    )
+    max_bet *= boost
+    return max(config.min_bet, max_bet)
 
 
 def compute_size(
@@ -14,6 +80,9 @@ def compute_size(
     confidence: float,
     ask_depth: float,
     price: float,
+    performance_win_rate: float | None = None,
+    performance_samples: int = 0,
+    peak_value: float = 0.0,
 ) -> float:
     """Compute position size in USDC (flat % fallback).
 
@@ -49,8 +118,15 @@ def compute_size(
             )
             size = liquidity_limit
 
-    # Absolute bounds
-    size = max(config.min_bet, min(config.max_bet, size))
+    # Absolute bounds (dynamic max bet scales with bankroll and performance)
+    max_bet_limit = effective_max_bet(
+        config=config,
+        portfolio_value=portfolio_value,
+        performance_win_rate=performance_win_rate,
+        performance_samples=performance_samples,
+        peak_value=peak_value,
+    )
+    size = max(config.min_bet, min(max_bet_limit, size))
 
     # Convert to share count, then back to cost for clean numbers
     if price > 0:
@@ -143,6 +219,9 @@ def compute_size_kelly(
     price: float,
     resolved_trades: int = 0,
     peak_value: float = 0.0,
+    win_probability: float | None = None,
+    performance_win_rate: float | None = None,
+    performance_samples: int = 0,
 ) -> float:
     """Kelly-optimal position sizing.
 
@@ -154,6 +233,9 @@ def compute_size_kelly(
         price: Expected fill price per share
         resolved_trades: Number of resolved trades (for ramp-up)
         peak_value: All-time high portfolio value (for drawdown throttle)
+        win_probability: Optional calibrated win probability override
+        performance_win_rate: Recent realized win rate used for controlled aggression
+        performance_samples: Sample count for performance_win_rate
 
     Returns:
         Position size in USDC (cost basis).
@@ -163,8 +245,10 @@ def compute_size_kelly(
         log.debug("kelly_below_floor", confidence=confidence, floor=config.kelly_confidence_floor)
         return 0.0
 
-    # Probability estimate with haircut
-    q = confidence - config.kelly_probability_haircut
+    # Probability estimate with haircut (prefers calibrated model probability when available)
+    q_source = win_probability if win_probability is not None else confidence
+    q_source = max(0.0, min(1.0, q_source))
+    q = q_source - config.kelly_probability_haircut
 
     # Minimum edge check
     if (q - price) < config.kelly_min_edge:
@@ -199,6 +283,7 @@ def compute_size_kelly(
     log.info(
         "kelly_sizing",
         confidence=round(confidence, 3),
+        win_probability=round(q_source, 3),
         q=round(q, 3),
         price=price,
         f_full=round(f_full, 4),
@@ -219,8 +304,15 @@ def compute_size_kelly(
             )
             size = liquidity_limit
 
-    # Absolute bounds
-    size = max(config.min_bet, min(config.max_bet, size))
+    # Absolute bounds (dynamic max bet scales with bankroll and performance)
+    max_bet_limit = effective_max_bet(
+        config=config,
+        portfolio_value=portfolio_value,
+        performance_win_rate=performance_win_rate,
+        performance_samples=performance_samples,
+        peak_value=peak_value,
+    )
+    size = max(config.min_bet, min(max_bet_limit, size))
 
     # Convert to share count, then back to cost for clean numbers
     if price > 0:

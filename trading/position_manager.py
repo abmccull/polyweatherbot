@@ -1,11 +1,11 @@
-"""Position management: profit lock + trailing stop on open positions."""
+"""Position management: hard stop-loss, profit lock, and trailing stop."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Callable
 
-from sqlalchemy import func, and_
+from sqlalchemy import or_
 
 from config import Config
 from db.engine import get_session
@@ -15,6 +15,14 @@ from trading.executor import TradeExecutor
 from utils.logging import get_logger
 
 log = get_logger("position_mgr")
+NON_EXECUTED_STATUSES = ("FAILED", "CANCELED", "REJECTED")
+
+
+def _is_executed_order() -> object:
+    return or_(
+        Trade.order_status.is_(None),
+        Trade.order_status.notin_(NON_EXECUTED_STATUSES),
+    )
 
 
 @dataclass
@@ -65,7 +73,7 @@ class PositionManager:
             open_token_ids = session.query(Trade.token_id).filter(
                 Trade.action == "BUY",
                 Trade.resolved_correct.is_(None),
-                Trade.order_status != "FAILED",
+                _is_executed_order(),
             ).distinct().subquery()
 
             # Single query: all trades for those token_ids
@@ -82,12 +90,18 @@ class PositionManager:
 
             for t in all_trades:
                 tid = t.token_id
-                if t.action == "SELL":
+                if t.action == "SELL" and (
+                    t.order_status is None or t.order_status not in NON_EXECUTED_STATUSES
+                ):
                     if tid not in sell_by_token:
                         sell_by_token[tid] = {"shares": 0.0, "proceeds": 0.0}
                     sell_by_token[tid]["shares"] += t.size
                     sell_by_token[tid]["proceeds"] += t.cost
-                elif t.action == "BUY" and t.resolved_correct is None and t.order_status != "FAILED":
+                elif (
+                    t.action == "BUY"
+                    and t.resolved_correct is None
+                    and (t.order_status is None or t.order_status not in NON_EXECUTED_STATUSES)
+                ):
                     if tid not in positions:
                         positions[tid] = {
                             "event_id": t.event_id,
@@ -154,6 +168,35 @@ class PositionManager:
                 continue
 
             state = self._lock_state.setdefault(pos.token_id, {"locked": False, "peak": 0.0})
+
+            # Hard downside stop: cut losses before they become tail-risk events.
+            if self._config.hard_stop_loss_enabled and pos.avg_entry_price > 0 and pos.total_shares > 0.01:
+                stop_price = pos.avg_entry_price * (1.0 - self._config.hard_stop_loss_pct)
+                if current_price <= stop_price:
+                    log.warning(
+                        "hard_stop_loss_triggered",
+                        city=pos.city,
+                        token_id=pos.token_id,
+                        entry=round(pos.avg_entry_price, 3),
+                        stop_price=round(stop_price, 3),
+                        current=round(current_price, 3),
+                        shares=round(pos.total_shares, 2),
+                    )
+                    trade = await self._executor.execute_sell(
+                        token_id=pos.token_id,
+                        shares=pos.total_shares,
+                        price=current_price,
+                        reason="STOP_LOSS",
+                        event_id=pos.event_id,
+                        city=pos.city,
+                        parent_trade_id=pos.first_buy_id,
+                    )
+                    if trade:
+                        exits.append(trade)
+                        if pos.token_id in self._lock_state:
+                            del self._lock_state[pos.token_id]
+                            self._persist_lock_state()
+                    continue
 
             if not state["locked"] and self._config.profit_lock_enabled:
                 # Check profit lock trigger

@@ -7,6 +7,7 @@ import pytest
 from config import Config
 from trading.sizing import (
     compute_size_kelly,
+    effective_max_bet,
     kelly_fraction,
     kelly_multiplier_for_confidence,
     drawdown_throttle,
@@ -15,7 +16,7 @@ from trading.sizing import (
 
 @pytest.fixture
 def config():
-    return Config(dry_run=True, initial_bankroll=1000.0)
+    return Config(dry_run=True, initial_bankroll=1000.0, dynamic_max_bet_enabled=False)
 
 
 class TestKellyFraction:
@@ -76,6 +77,114 @@ class TestComputeSizeKelly:
             price=0.10, resolved_trades=100, peak_value=10000.0,
         )
         assert size <= config.max_bet
+
+
+class TestAdaptiveSizing:
+    """Dynamic max-bet and aggression behavior."""
+
+    def test_dynamic_max_bet_scales_with_bankroll(self):
+        cfg = Config(
+            dry_run=True,
+            initial_bankroll=1000.0,
+            dynamic_max_bet_enabled=True,
+            dynamic_max_bet_pct=0.10,
+            dynamic_max_bet_floor=150.0,
+            dynamic_max_bet_cap=5000.0,
+            aggression_enabled=False,
+        )
+        # 10% of bankroll (500) should set max-bet above floor
+        cap = effective_max_bet(cfg, portfolio_value=5000.0, peak_value=5000.0)
+        assert cap == pytest.approx(500.0, rel=1e-6)
+
+        size = compute_size_kelly(
+            cfg,
+            portfolio_value=5000.0,
+            confidence=0.97,
+            ask_depth=100000.0,
+            price=0.12,
+            resolved_trades=200,
+            peak_value=5000.0,
+        )
+        assert size <= cap
+        assert size > 150.0
+
+    def test_aggression_boost_expands_max_bet_when_win_rate_is_strong(self):
+        cfg = Config(
+            dry_run=True,
+            initial_bankroll=1000.0,
+            dynamic_max_bet_enabled=True,
+            dynamic_max_bet_pct=0.05,
+            dynamic_max_bet_floor=150.0,
+            dynamic_max_bet_cap=5000.0,
+            aggression_enabled=True,
+            aggression_min_samples=40,
+            aggression_target_win_rate=0.90,
+            aggression_max_boost=0.75,
+            aggression_drawdown_guard=0.20,
+        )
+
+        base_size = compute_size_kelly(
+            cfg,
+            portfolio_value=10000.0,
+            confidence=0.99,
+            ask_depth=100000.0,
+            price=0.10,
+            resolved_trades=300,
+            peak_value=10000.0,
+            performance_win_rate=None,
+            performance_samples=0,
+        )
+        boosted_size = compute_size_kelly(
+            cfg,
+            portfolio_value=10000.0,
+            confidence=0.99,
+            ask_depth=100000.0,
+            price=0.10,
+            resolved_trades=300,
+            peak_value=10000.0,
+            performance_win_rate=0.95,
+            performance_samples=300,
+        )
+        assert boosted_size > base_size
+
+    def test_aggression_boost_disabled_in_large_drawdown(self):
+        cfg = Config(
+            dry_run=True,
+            initial_bankroll=1000.0,
+            dynamic_max_bet_enabled=True,
+            dynamic_max_bet_pct=0.05,
+            dynamic_max_bet_floor=150.0,
+            dynamic_max_bet_cap=5000.0,
+            aggression_enabled=True,
+            aggression_min_samples=40,
+            aggression_target_win_rate=0.90,
+            aggression_max_boost=0.75,
+            aggression_drawdown_guard=0.10,
+        )
+
+        boosted = compute_size_kelly(
+            cfg,
+            portfolio_value=10000.0,
+            confidence=0.99,
+            ask_depth=100000.0,
+            price=0.10,
+            resolved_trades=300,
+            peak_value=10000.0,
+            performance_win_rate=0.95,
+            performance_samples=300,
+        )
+        drawdown_blocked = compute_size_kelly(
+            cfg,
+            portfolio_value=7000.0,  # 30% DD from peak
+            confidence=0.99,
+            ask_depth=100000.0,
+            price=0.10,
+            resolved_trades=300,
+            peak_value=10000.0,
+            performance_win_rate=0.95,
+            performance_samples=300,
+        )
+        assert drawdown_blocked < boosted
 
 
 class TestDrawdownThrottle:

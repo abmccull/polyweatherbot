@@ -6,10 +6,10 @@ import calendar
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 
-from sqlalchemy import func, and_
+from sqlalchemy import func, or_
 
 from db.engine import get_session
-from db.models import Trade, DailyPnL
+from db.models import Trade, DailyPnL, SignalCandidate
 from settlement.noaa import NOAAClient
 from settlement.open_meteo import OpenMeteoClient
 from utils.logging import get_logger
@@ -17,6 +17,14 @@ from weather.station_map import lookup_city, lookup_ghcnd
 from weather.temperature import temp_hits_bucket, PreciseTemp, Precision
 
 log = get_logger("tracker")
+NON_EXECUTED_STATUSES = ("FAILED", "CANCELED", "REJECTED")
+
+
+def _is_executed_order() -> object:
+    return or_(
+        Trade.order_status.is_(None),
+        Trade.order_status.notin_(NON_EXECUTED_STATUSES),
+    )
 
 
 @dataclass
@@ -30,6 +38,28 @@ class TradeStats:
     win_rate: float = 0.0
     total_pnl: float = 0.0
     avg_roi: float = 0.0
+
+
+@dataclass
+class ExpectancyDriftStats:
+    """Expected-vs-realized edge diagnostics."""
+
+    samples: int = 0
+    avg_expected_edge: float = 0.0
+    avg_realized_edge: float = 0.0
+    avg_edge_drift: float = 0.0
+    positive_realized_edge_rate: float = 0.0
+
+
+@dataclass
+class SlippageDriftStats:
+    """Expected-vs-realized slippage diagnostics."""
+
+    samples: int = 0
+    avg_expected_slippage: float = 0.0
+    avg_realized_slippage: float = 0.0
+    avg_slippage_drift: float = 0.0
+    p75_positive_slippage_bps: float = 0.0
 
 
 class TradeTracker:
@@ -54,9 +84,10 @@ class TradeTracker:
         try:
             # Find unresolved BUY trades (SELL trades are inert execution records)
             unresolved = session.query(Trade).filter(
-                Trade.action != "SELL",
+                Trade.action == "BUY",
                 Trade.resolved_correct.is_(None),
-                Trade.order_status != "FAILED",
+                _is_executed_order(),
+                Trade.size > 0.0,
             ).all()
 
             if not unresolved:
@@ -110,25 +141,49 @@ class TradeTracker:
         # Fallback: Open-Meteo (international cities)
         if station.latitude is not None and self._open_meteo:
             tmax_c = await self._open_meteo.get_daily_tmax(
-                station.latitude, station.longitude, market_date,
+                station.latitude,
+                station.longitude,
+                market_date,
+                timezone=station.timezone,
             )
             if tmax_c is not None:
                 return self._apply_temp_resolution(trade, tmax_c, source="open_meteo")
 
         return False
 
-    @staticmethod
-    def _get_sell_summary(trade: Trade, session) -> tuple[float, float, float]:
+    def _get_sell_summary(self, trade: Trade, session) -> tuple[float, float, float]:
         """Get sell summary for the token of a BUY trade.
 
         Returns:
             (sold_shares, sell_proceeds, sell_fees) for SELL trades
-            matching this BUY trade's token_id.
+            matching this BUY trade, preferring explicit parent_trade_id links.
         """
-        sells = session.query(Trade).filter(
+        sell_query = session.query(Trade).filter(
             Trade.action == "SELL",
             Trade.token_id == trade.token_id,
-        ).all()
+            _is_executed_order(),
+        )
+
+        buy_count = session.query(func.count(Trade.id)).filter(
+            Trade.action == "BUY",
+            Trade.token_id == trade.token_id,
+            _is_executed_order(),
+        ).scalar() or 0
+
+        if buy_count <= 1:
+            sells = sell_query.all()
+        else:
+            sells = sell_query.filter(Trade.parent_trade_id == trade.id).all()
+            unlinked_count = sell_query.filter(Trade.parent_trade_id.is_(None)).count()
+            if unlinked_count > 0:
+                log.warning(
+                    "unlinked_sells_ignored",
+                    token_id=trade.token_id,
+                    trade_id=trade.id,
+                    buy_count=buy_count,
+                    ignored_unlinked=unlinked_count,
+                )
+
         sold_shares = sum(s.size for s in sells)
         sell_proceeds = sum(s.cost for s in sells)  # cost stores proceeds for SELL trades
         sell_fees = sum(s.fee_paid or 0.0 for s in sells)
@@ -298,6 +353,8 @@ class TradeTracker:
         query = session.query(Trade).filter(
             Trade.action == "BUY",
             Trade.resolved_correct.isnot(None),
+            _is_executed_order(),
+            Trade.size > 0.0,
         )
         if lookback_days is not None:
             cutoff = datetime.utcnow().replace(hour=0, minute=0, second=0)
@@ -321,6 +378,8 @@ class TradeTracker:
             trades = session.query(Trade).filter(
                 Trade.action == "BUY",
                 Trade.resolved_correct.isnot(None),
+                _is_executed_order(),
+                Trade.size > 0.0,
             ).all()
             bands: dict[str, list[Trade]] = {
                 "0.70-0.80": [],
@@ -393,14 +452,202 @@ class TradeTracker:
         finally:
             session.close()
 
+    def get_confidence_outcomes(self, lookback_days: int | None = 120) -> list[tuple[float, int]]:
+        """Return historical (confidence, outcome) tuples for calibration."""
+        session = get_session()
+        try:
+            trades = self._resolved_query(session, lookback_days).all()
+            points: list[tuple[float, int]] = []
+            for trade in trades:
+                if trade.confidence is None:
+                    continue
+                conf = max(0.0, min(1.0, float(trade.confidence)))
+                points.append((conf, 1 if trade.resolved_correct else 0))
+            return points
+        finally:
+            session.close()
+
+    def get_recent_buy_slippage_bps(self, lookback_trades: int = 100) -> float | None:
+        """Estimate recent positive slippage on BUY fills in basis points.
+
+        Returns p75 slippage bps for recent filled BUY trades, or None when
+        there isn't enough live-fill data.
+        """
+        session = get_session()
+        try:
+            trades = (
+                session.query(Trade)
+                .filter(
+                    Trade.action == "BUY",
+                    Trade.fill_price.isnot(None),
+                    Trade.price > 0,
+                    _is_executed_order(),
+                )
+                .order_by(Trade.created_at.desc())
+                .limit(lookback_trades)
+                .all()
+            )
+            if len(trades) < 10:
+                return None
+
+            slippages = []
+            for t in trades:
+                if t.fill_price is None or t.price <= 0:
+                    continue
+                bps = ((t.fill_price - t.price) / t.price) * 10_000
+                # Negative slippage (price improvement) should not reduce caution.
+                slippages.append(max(bps, 0.0))
+
+            if len(slippages) < 10:
+                return None
+
+            slippages.sort()
+            idx = int(0.75 * (len(slippages) - 1))
+            return slippages[idx]
+        finally:
+            session.close()
+
+    def get_expectancy_drift_stats(self, lookback_days: int = 30) -> ExpectancyDriftStats:
+        """Compare expected edge at entry vs realized edge at resolution."""
+        session = get_session()
+        try:
+            trades = self._resolved_query(session, lookback_days).filter(
+                Trade.expected_edge.isnot(None),
+                Trade.size > 0.0,
+            ).all()
+            if not trades:
+                return ExpectancyDriftStats()
+
+            expected_edges: list[float] = []
+            realized_edges: list[float] = []
+            positive = 0
+            for trade in trades:
+                if trade.expected_edge is None or trade.size <= 0:
+                    continue
+                realized_edge = (trade.pnl or 0.0) / trade.size
+                expected_edges.append(float(trade.expected_edge))
+                realized_edges.append(realized_edge)
+                if realized_edge > 0:
+                    positive += 1
+
+            if not expected_edges:
+                return ExpectancyDriftStats()
+
+            samples = len(expected_edges)
+            avg_expected = sum(expected_edges) / samples
+            avg_realized = sum(realized_edges) / samples
+            return ExpectancyDriftStats(
+                samples=samples,
+                avg_expected_edge=avg_expected,
+                avg_realized_edge=avg_realized,
+                avg_edge_drift=avg_realized - avg_expected,
+                positive_realized_edge_rate=(positive / samples) if samples > 0 else 0.0,
+            )
+        finally:
+            session.close()
+
+    def get_slippage_drift_stats(self, lookback_days: int = 30) -> SlippageDriftStats:
+        """Compare expected per-share slippage to realized fill slippage."""
+        session = get_session()
+        try:
+            cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+            trades = session.query(Trade).filter(
+                Trade.action == "BUY",
+                Trade.created_at >= cutoff,
+                Trade.price > 0,
+                Trade.fill_price.isnot(None),
+                Trade.expected_slippage.isnot(None),
+                _is_executed_order(),
+            ).all()
+            if not trades:
+                return SlippageDriftStats()
+
+            expected: list[float] = []
+            realized: list[float] = []
+            positive_bps: list[float] = []
+
+            for trade in trades:
+                if trade.fill_price is None or trade.expected_slippage is None or trade.price <= 0:
+                    continue
+                exp = float(trade.expected_slippage)
+                real = float(trade.fill_price - trade.price)
+                expected.append(exp)
+                realized.append(real)
+                positive_bps.append(max(0.0, ((trade.fill_price - trade.price) / trade.price) * 10_000))
+
+            if not expected:
+                return SlippageDriftStats()
+
+            samples = len(expected)
+            avg_expected = sum(expected) / samples
+            avg_realized = sum(realized) / samples
+
+            positive_bps.sort()
+            p75_idx = int(0.75 * (len(positive_bps) - 1))
+            p75 = positive_bps[p75_idx] if positive_bps else 0.0
+
+            return SlippageDriftStats(
+                samples=samples,
+                avg_expected_slippage=avg_expected,
+                avg_realized_slippage=avg_realized,
+                avg_slippage_drift=avg_realized - avg_expected,
+                p75_positive_slippage_bps=p75,
+            )
+        finally:
+            session.close()
+
+    def get_signal_funnel_stats(self, window_hours: int = 24) -> dict[str, object]:
+        """Summarize candidate -> emitted -> executed conversion over a time window."""
+        session = get_session()
+        try:
+            cutoff = datetime.utcnow() - timedelta(hours=window_hours)
+            rows = session.query(
+                SignalCandidate.status,
+                func.count(SignalCandidate.id),
+            ).filter(
+                SignalCandidate.created_at >= cutoff,
+            ).group_by(SignalCandidate.status).all()
+            status_counts = {status: count for status, count in rows}
+
+            candidates = sum(status_counts.values())
+            emitted = int(status_counts.get("EMITTED", 0))
+
+            executed_buys = session.query(func.count(Trade.id)).filter(
+                Trade.action == "BUY",
+                Trade.created_at >= cutoff,
+                _is_executed_order(),
+                Trade.size > 0.0,
+            ).scalar() or 0
+
+            emission_rate = (emitted / candidates) if candidates > 0 else 0.0
+            execution_rate = (executed_buys / emitted) if emitted > 0 else 0.0
+            return {
+                "window_hours": window_hours,
+                "candidates": candidates,
+                "emitted": emitted,
+                "executed_buys": int(executed_buys),
+                "emission_rate": emission_rate,
+                "execution_rate_from_emitted": execution_rate,
+                "status_counts": status_counts,
+            }
+        finally:
+            session.close()
+
     def _update_daily_pnl(self) -> None:
         """Update daily P&L summary table."""
         session = get_session()
         try:
-            today = datetime.utcnow().date().isoformat()
+            day_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            today = day_start.date().isoformat()
             trades = session.query(Trade).filter(
+                Trade.action == "BUY",
                 Trade.resolved_correct.isnot(None),
-                Trade.market_date == today,
+                Trade.resolved_at.isnot(None),
+                Trade.resolved_at >= day_start,
+                Trade.resolved_at < day_end,
+                _is_executed_order(),
+                Trade.size > 0.0,
             ).all()
 
             existing = session.query(DailyPnL).filter(DailyPnL.date == today).first()
@@ -411,9 +658,10 @@ class TradeTracker:
             existing.trades_count = len(trades)
             existing.wins = sum(1 for t in trades if t.resolved_correct)
             existing.losses = existing.trades_count - existing.wins
-            existing.gross_pnl = sum(t.pnl or 0.0 for t in trades)
+            # `pnl` is net on each trade, so derive gross by adding fees back.
+            existing.gross_pnl = sum((t.pnl or 0.0) + (t.fee_paid or 0.0) for t in trades)
             existing.fees = sum(t.fee_paid or 0.0 for t in trades)
-            existing.net_pnl = existing.gross_pnl - existing.fees
+            existing.net_pnl = sum(t.pnl or 0.0 for t in trades)
 
             session.commit()
         except Exception as e:

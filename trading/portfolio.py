@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from config import Config
 from db.engine import get_session
@@ -13,6 +13,24 @@ from db.state import save_state, load_state
 from utils.logging import get_logger
 
 log = get_logger("portfolio")
+
+NON_EXECUTED_STATUSES = ("FAILED", "CANCELED", "REJECTED")
+TERMINAL_ORDER_STATUSES = ("FILLED", "MATCHED", "FAILED", "CANCELED", "REJECTED")
+
+
+def _is_executed_order() -> object:
+    """SQLAlchemy predicate for trades that should impact economics."""
+    return or_(
+        Trade.order_status.is_(None),
+        Trade.order_status.notin_(NON_EXECUTED_STATUSES),
+    )
+
+
+def _is_open_order() -> object:
+    return or_(
+        Trade.order_status.is_(None),
+        Trade.order_status.notin_(TERMINAL_ORDER_STATUSES),
+    )
 
 
 class Portfolio:
@@ -54,6 +72,7 @@ class Portfolio:
             open_cost = session.query(func.sum(Trade.cost)).filter(
                 Trade.action == "BUY",
                 Trade.resolved_correct.is_(None),
+                _is_executed_order(),
             ).scalar() or 0.0
 
             value = self._config.initial_bankroll + total_pnl - open_cost
@@ -74,10 +93,22 @@ class Portfolio:
         """Total capital currently deployed in open BUY positions."""
         session = get_session()
         try:
-            return session.query(func.sum(Trade.cost)).filter(
+            filled_deployed = session.query(func.sum(Trade.cost)).filter(
                 Trade.action == "BUY",
                 Trade.resolved_correct.is_(None),
+                _is_executed_order(),
             ).scalar() or 0.0
+
+            # Reserve for working BUY orders not fully filled yet.
+            pending_rows = session.query(Trade.requested_cost, Trade.cost).filter(
+                Trade.action == "BUY",
+                Trade.resolved_correct.is_(None),
+                or_(Trade.order_status.is_(None), Trade.order_status != "DRY_RUN"),
+                _is_open_order(),
+                _is_executed_order(),
+            ).all()
+            pending_reserve = sum(max((req or 0.0) - (filled or 0.0), 0.0) for req, filled in pending_rows)
+            return filled_deployed + pending_reserve
         finally:
             session.close()
 
@@ -85,11 +116,23 @@ class Portfolio:
         """Capital deployed in a specific market (BUY trades only)."""
         session = get_session()
         try:
-            return session.query(func.sum(Trade.cost)).filter(
+            filled_exposure = session.query(func.sum(Trade.cost)).filter(
                 Trade.action == "BUY",
                 Trade.event_id == event_id,
                 Trade.resolved_correct.is_(None),
+                _is_executed_order(),
             ).scalar() or 0.0
+
+            pending_rows = session.query(Trade.requested_cost, Trade.cost).filter(
+                Trade.action == "BUY",
+                Trade.event_id == event_id,
+                Trade.resolved_correct.is_(None),
+                or_(Trade.order_status.is_(None), Trade.order_status != "DRY_RUN"),
+                _is_open_order(),
+                _is_executed_order(),
+            ).all()
+            pending_reserve = sum(max((req or 0.0) - (filled or 0.0), 0.0) for req, filled in pending_rows)
+            return filled_exposure + pending_reserve
         finally:
             session.close()
 

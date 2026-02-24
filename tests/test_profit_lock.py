@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 from config import Config
 from db.models import Trade
@@ -167,3 +168,68 @@ class TestPositionAggregation:
 
         positions = pm.get_open_positions()
         assert len(positions) == 0
+
+
+class TestHardStopLoss:
+    """Downside protection exits when position drawdown exceeds threshold."""
+
+    @pytest.mark.asyncio
+    async def test_hard_stop_loss_sells_full_position(self, db_session):
+        cfg = Config(
+            dry_run=True,
+            initial_bankroll=1000.0,
+            profit_lock_enabled=True,
+            trailing_stop_enabled=True,
+            hard_stop_loss_enabled=True,
+            hard_stop_loss_pct=0.65,
+        )
+
+        buy = _make_buy(db_session, token_id="tok_stop", price=0.50, shares=100.0)
+
+        class _Executor:
+            def __init__(self):
+                self.calls = []
+
+            async def execute_sell(self, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(id=999, exit_reason=kwargs["reason"], size=kwargs["shares"])
+
+        executor = _Executor()
+        pm = PositionManager(executor, cfg)
+
+        exits = await pm.check_positions(price_getter=lambda tid: 0.15 if tid == "tok_stop" else None)
+        assert len(exits) == 1
+        assert exits[0].exit_reason == "STOP_LOSS"
+
+        assert len(executor.calls) == 1
+        call = executor.calls[0]
+        assert call["token_id"] == "tok_stop"
+        assert call["reason"] == "STOP_LOSS"
+        assert call["shares"] == pytest.approx(100.0, rel=1e-6)
+        assert call["parent_trade_id"] == buy.id
+
+    @pytest.mark.asyncio
+    async def test_hard_stop_loss_not_triggered_above_threshold(self, db_session):
+        cfg = Config(
+            dry_run=True,
+            initial_bankroll=1000.0,
+            hard_stop_loss_enabled=True,
+            hard_stop_loss_pct=0.65,
+        )
+        _make_buy(db_session, token_id="tok_no_stop", price=0.50, shares=100.0)
+
+        class _Executor:
+            def __init__(self):
+                self.calls = []
+
+            async def execute_sell(self, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(id=1000, exit_reason=kwargs["reason"], size=kwargs["shares"])
+
+        executor = _Executor()
+        pm = PositionManager(executor, cfg)
+
+        # Threshold is 0.175; current price is above threshold.
+        exits = await pm.check_positions(price_getter=lambda tid: 0.20 if tid == "tok_no_stop" else None)
+        assert exits == []
+        assert executor.calls == []
