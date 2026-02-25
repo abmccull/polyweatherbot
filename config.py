@@ -129,6 +129,22 @@ class Config:
     aggression_max_boost: float = 0.75      # at most +75% max-bet expansion
     aggression_drawdown_guard: float = 0.12 # disable boost above this drawdown
 
+    # Self-learning (contextual Bayesian probability adjustments)
+    self_learning_enabled: bool = True
+    self_learning_lookback_days: int = 180
+    self_learning_min_samples: int = 30
+    self_learning_min_segment_samples: int = 5
+    self_learning_prior_alpha: float = 2.0
+    self_learning_prior_beta: float = 2.0
+    self_learning_city_prior: float = 30.0
+    self_learning_hour_prior: float = 20.0
+    self_learning_bucket_prior: float = 16.0
+    self_learning_precision_prior: float = 24.0
+    self_learning_blend: float = 0.55
+    self_learning_reliability_samples: int = 80
+    self_learning_confidence_scale: float = 0.30
+    self_learning_confidence_cap: float = 0.08
+
     # EV gate (post-cost edge filter)
     enable_ev_gate: bool = True
     min_expected_edge: float = 0.02      # minimum net edge per share after fees/slippage
@@ -201,6 +217,44 @@ class Config:
         cfg.aggression_max_boost = float(os.getenv("AGGRESSION_MAX_BOOST", str(cfg.aggression_max_boost)))
         cfg.aggression_drawdown_guard = float(
             os.getenv("AGGRESSION_DRAWDOWN_GUARD", str(cfg.aggression_drawdown_guard))
+        )
+        cfg.self_learning_enabled = _env_bool("SELF_LEARNING_ENABLED", cfg.self_learning_enabled)
+        cfg.self_learning_lookback_days = int(
+            os.getenv("SELF_LEARNING_LOOKBACK_DAYS", str(cfg.self_learning_lookback_days))
+        )
+        cfg.self_learning_min_samples = int(
+            os.getenv("SELF_LEARNING_MIN_SAMPLES", str(cfg.self_learning_min_samples))
+        )
+        cfg.self_learning_min_segment_samples = int(
+            os.getenv("SELF_LEARNING_MIN_SEGMENT_SAMPLES", str(cfg.self_learning_min_segment_samples))
+        )
+        cfg.self_learning_prior_alpha = float(
+            os.getenv("SELF_LEARNING_PRIOR_ALPHA", str(cfg.self_learning_prior_alpha))
+        )
+        cfg.self_learning_prior_beta = float(
+            os.getenv("SELF_LEARNING_PRIOR_BETA", str(cfg.self_learning_prior_beta))
+        )
+        cfg.self_learning_city_prior = float(
+            os.getenv("SELF_LEARNING_CITY_PRIOR", str(cfg.self_learning_city_prior))
+        )
+        cfg.self_learning_hour_prior = float(
+            os.getenv("SELF_LEARNING_HOUR_PRIOR", str(cfg.self_learning_hour_prior))
+        )
+        cfg.self_learning_bucket_prior = float(
+            os.getenv("SELF_LEARNING_BUCKET_PRIOR", str(cfg.self_learning_bucket_prior))
+        )
+        cfg.self_learning_precision_prior = float(
+            os.getenv("SELF_LEARNING_PRECISION_PRIOR", str(cfg.self_learning_precision_prior))
+        )
+        cfg.self_learning_blend = float(os.getenv("SELF_LEARNING_BLEND", str(cfg.self_learning_blend)))
+        cfg.self_learning_reliability_samples = int(
+            os.getenv("SELF_LEARNING_RELIABILITY_SAMPLES", str(cfg.self_learning_reliability_samples))
+        )
+        cfg.self_learning_confidence_scale = float(
+            os.getenv("SELF_LEARNING_CONFIDENCE_SCALE", str(cfg.self_learning_confidence_scale))
+        )
+        cfg.self_learning_confidence_cap = float(
+            os.getenv("SELF_LEARNING_CONFIDENCE_CAP", str(cfg.self_learning_confidence_cap))
         )
         cfg.enable_ev_gate = _env_bool("ENABLE_EV_GATE", cfg.enable_ev_gate)
         cfg.min_expected_edge = float(os.getenv("MIN_EXPECTED_EDGE", str(cfg.min_expected_edge)))

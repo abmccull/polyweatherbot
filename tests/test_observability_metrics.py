@@ -104,6 +104,19 @@ def test_write_metrics_snapshot_includes_drift_and_calibration_sections(db_sessi
                 "ece": 0.04,
             }
 
+    class _SelfLearner:
+        def get_diagnostics(self):
+            return {
+                "enabled": True,
+                "trained_samples": 64,
+                "global_probability": 0.83,
+                "city_segments": 5,
+                "hour_segments": 8,
+                "bucket_segments": 2,
+                "precision_segments": 2,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+
     # Add one candidate so funnel/status output is non-empty.
     db_session.add(
         SignalCandidate(
@@ -158,6 +171,7 @@ def test_write_metrics_snapshot_includes_drift_and_calibration_sections(db_sessi
         _PositionManager(),
         active_markets=3,
         calibrator=_Calibrator(),
+        self_learner=_SelfLearner(),
     )
 
     snapshot = json.loads(metrics_path.read_text())
@@ -168,3 +182,5 @@ def test_write_metrics_snapshot_includes_drift_and_calibration_sections(db_sessi
     assert "signal_funnel_24h" in snapshot
     assert "calibration_model" in snapshot
     assert snapshot["calibration_model"]["sample_size"] == 42
+    assert "self_learning" in snapshot
+    assert snapshot["self_learning"]["trained_samples"] == 64

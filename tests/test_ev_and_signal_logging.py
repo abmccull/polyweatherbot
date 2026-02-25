@@ -12,6 +12,7 @@ import pytz
 from config import Config
 from db.engine import get_session
 from db.models import SignalCandidate, Trade
+from learning.self_learner import ContextSignal
 from signals.confidence import ConfidenceFactors
 from signals.detector import SignalDetector, TradeSignal
 from trading.executor import TradeExecutor
@@ -153,7 +154,7 @@ def test_dynamic_slippage_uses_tracker_estimate(db_session):
 
 
 @pytest.mark.asyncio
-async def test_detector_persists_signal_candidates(db_session):
+async def test_detector_persists_signal_candidates(db_session, monkeypatch):
     @dataclass
     class _Bucket:
         bucket_type: str
@@ -202,6 +203,8 @@ async def test_detector_persists_signal_candidates(db_session):
         geq_min_hour=0,
     )
     cfg.min_confidence.value = 0.75
+    monkeypatch.setattr("signals.detector.local_hour", lambda _tz: 14)
+    monkeypatch.setattr("signals.detector.is_peak_heating", lambda _tz: True)
 
     detector = SignalDetector(cfg, _Metar(), _Registry(), tracker=None, calibrator=None)
     signals = await detector.detect()
@@ -219,3 +222,88 @@ async def test_detector_persists_signal_candidates(db_session):
     assert statuses["tok_low_conf"] in {"BUCKET_MISS", "CONFIDENCE_BLOCKED"}
     emitted = [r for r in rows if r.token_id == "tok_emit"][0]
     assert emitted.calibrated_probability is not None
+
+
+@pytest.mark.asyncio
+async def test_detector_self_learning_adjustment_can_unlock_signal(db_session, monkeypatch):
+    @dataclass
+    class _Bucket:
+        bucket_type: str
+        bucket_value: int
+        unit: str
+
+    @dataclass
+    class _BucketData:
+        token_id: str
+        condition_id: str
+        bucket: _Bucket
+
+    market = SimpleNamespace(
+        event_id="evt3",
+        icao="KATL",
+        timezone="America/New_York",
+        market_type="temperature",
+        info=SimpleNamespace(city="Atlanta", market_date=date(2026, 2, 24)),
+        buckets=[
+            _BucketData(token_id="tok_self", condition_id="c3", bucket=_Bucket("geq", 74, "F")),
+        ],
+    )
+    active = SimpleNamespace(
+        market=market,
+        bucket_prices={
+            "tok_self": SimpleNamespace(best_bid=0.41, best_ask=0.45, bid_depth=200.0, ask_depth=150.0),
+        },
+    )
+
+    class _Registry:
+        def get_all_active(self):
+            return [active]
+
+    class _Metar:
+        def get_daily_high(self, _icao):
+            dh = DailyHigh(station="KATL", date=date(2026, 2, 24))
+            dh.high = PreciseTemp(celsius=24.5, precision=Precision.TENTHS)  # ~76.1F
+            dh.last_obs_time = datetime.utcnow().replace(tzinfo=pytz.utc)
+            return dh
+
+    class _SelfLearner:
+        def get_context_signal(self, city, hour, bucket_type, precision):
+            return ContextSignal(
+                context_probability=0.98,
+                reliability=1.0,
+                confidence_adjustment=0.08,
+                matched_segments={"city": 25, "hour": 20},
+            )
+
+        def blend_probability(self, base_probability: float, context: ContextSignal | None) -> float:
+            if context is None:
+                return base_probability
+            return min(1.0, base_probability + 0.01)
+
+    monkeypatch.setattr("signals.detector.local_hour", lambda _tz: 14)
+    monkeypatch.setattr("signals.detector.is_peak_heating", lambda _tz: True)
+
+    cfg = Config(
+        dry_run=True,
+        min_price=0.30,
+        geq_min_hour=0,
+    )
+    cfg.min_confidence.value = 0.95
+
+    detector_without = SignalDetector(cfg, _Metar(), _Registry(), tracker=None, calibrator=None)
+    signals_without = await detector_without.detect()
+    assert len(signals_without) == 0
+
+    detector_with = SignalDetector(
+        cfg,
+        _Metar(),
+        _Registry(),
+        tracker=None,
+        calibrator=None,
+        self_learner=_SelfLearner(),
+    )
+    signals_with = await detector_with.detect()
+    assert len(signals_with) == 1
+    assert signals_with[0].token_id == "tok_self"
+    assert signals_with[0].win_probability is not None
+    assert signals_with[0].win_probability > 0.95

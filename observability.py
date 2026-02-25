@@ -9,6 +9,7 @@ from datetime import datetime
 
 from config import Config
 from learning.calibrator import ConfidenceCalibrator
+from learning.self_learner import SelfLearner
 from learning.tracker import TradeTracker
 from trading.portfolio import Portfolio
 from trading.position_manager import PositionManager
@@ -26,6 +27,7 @@ def write_metrics_snapshot(
     position_manager: PositionManager,
     active_markets: int = 0,
     calibrator: ConfidenceCalibrator | None = None,
+    self_learner: SelfLearner | None = None,
 ) -> None:
     """Collect and atomically write a metrics snapshot to metrics.json."""
     try:
@@ -42,6 +44,7 @@ def write_metrics_snapshot(
         funnel = tracker.get_signal_funnel_stats(window_hours=24)
         recent_slippage_bps = tracker.get_recent_buy_slippage_bps()
         calibration_model = calibrator.get_model_diagnostics() if calibrator is not None else None
+        self_learning = self_learner.get_diagnostics() if self_learner is not None else None
 
         open_positions = position_manager.get_open_positions()
 
@@ -114,6 +117,7 @@ def write_metrics_snapshot(
             },
             "signal_funnel_24h": funnel,
             "calibration_model": calibration_model,
+            "self_learning": self_learning,
             "circuit_breaker": {
                 "active": portfolio._circuit_breaker_until is not None
                 and datetime.utcnow() < portfolio._circuit_breaker_until,

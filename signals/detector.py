@@ -73,12 +73,14 @@ class SignalDetector:
         registry: MarketRegistry,
         tracker: TradeTracker | None = None,
         calibrator=None,
+        self_learner=None,
     ) -> None:
         self._config = config
         self._metar = metar_feed
         self._registry = registry
         self._tracker = tracker
         self._calibrator = calibrator
+        self._self_learner = self_learner
         # Track which signals we've already emitted to avoid duplicates
         self._emitted: set[str] = set()
 
@@ -339,9 +341,21 @@ class SignalDetector:
             peak = is_peak_heating(market.timezone)
 
             historical_accuracy = None
-            if self._tracker is not None:
+            context_signal = None
+            if self._self_learner is not None:
+                context_signal = self._self_learner.get_context_signal(
+                    city=market.info.city,
+                    hour=hour,
+                    bucket_type=bucket.bucket_type,
+                    precision=temp.precision.value,
+                )
+                if context_signal is not None:
+                    historical_accuracy = context_signal.context_probability
+
+            if historical_accuracy is None and self._tracker is not None:
                 historical_accuracy = self._tracker.get_historical_accuracy(
-                    city=market.info.city, hour=hour,
+                    city=market.info.city,
+                    hour=hour,
                 )
 
             calibration_adj = 0.0
@@ -349,6 +363,9 @@ class SignalDetector:
                 calibration_adj = self._calibrator.get_adjustment_for_confidence(
                     match.confidence,
                 )
+            if context_signal is not None:
+                calibration_adj += context_signal.confidence_adjustment
+                calibration_adj = max(-0.20, min(0.20, calibration_adj))
 
             confidence = compute_confidence(
                 bucket_match=match,
@@ -364,6 +381,11 @@ class SignalDetector:
                 calibrated = self._calibrator.get_calibrated_probability(confidence.total)
                 if calibrated is not None:
                     win_probability = calibrated
+            if context_signal is not None and self._self_learner is not None:
+                win_probability = self._self_learner.blend_probability(
+                    base_probability=win_probability,
+                    context=context_signal,
+                )
 
             if confidence.total < min_confidence:
                 log.debug(

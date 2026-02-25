@@ -13,6 +13,7 @@ from db.engine import init_db, cleanup_old_data
 from observability import write_metrics_snapshot
 from learning.calibrator import ConfidenceCalibrator
 from learning.optimizer import ParameterOptimizer, restore_tunable_params
+from learning.self_learner import SelfLearner
 from learning.tracker import TradeTracker
 from markets.discovery import MarketDiscovery
 from markets.realtime import ClobMarketFeed
@@ -52,9 +53,11 @@ class StationSniper:
         self.tracker = TradeTracker(noaa_client=self.noaa_client, open_meteo=self.open_meteo)
         self.executor = TradeExecutor(config, self.portfolio, tracker=self.tracker)
         self.calibrator = ConfidenceCalibrator(self.tracker)
+        self.self_learner = SelfLearner(config) if config.self_learning_enabled else None
         self.detector = SignalDetector(config, self.metar_feed, self.registry,
                                        tracker=self.tracker,
-                                       calibrator=self.calibrator)
+                                       calibrator=self.calibrator,
+                                       self_learner=self.self_learner)
         self.position_manager = PositionManager(self.executor, config)
         self.redeemer = PositionRedeemer(config)
         self.optimizer = ParameterOptimizer(config, self.tracker)
@@ -80,6 +83,13 @@ class StationSniper:
         restored = restore_tunable_params(self.config)
         for r in restored:
             log.info("param_restored", detail=r)
+
+        # Restore/retrain self-learning model
+        if self.self_learner is not None:
+            if self.self_learner.restore():
+                log.info("self_learning_restored", **self.self_learner.get_diagnostics())
+            self_learning_bootstrap = self.self_learner.retrain()
+            log.info("self_learning_bootstrap", **self_learning_bootstrap)
 
         # Init CLOB client
         self.executor.init_client()
@@ -259,6 +269,10 @@ class StationSniper:
                 if model_diag is not None:
                     log.info("calibration_model", **model_diag)
 
+                if self.self_learner is not None:
+                    learning_diag = self.self_learner.retrain()
+                    log.info("self_learning_cycle", **learning_diag)
+
                 # Update portfolio outcomes for circuit breaker
                 stats = self.tracker.get_stats(lookback_days=1)
                 log.info(
@@ -314,6 +328,7 @@ class StationSniper:
                     self.position_manager,
                     active_markets=self.registry.count,
                     calibrator=self.calibrator,
+                    self_learner=self.self_learner,
                 )
             except asyncio.CancelledError:
                 return
