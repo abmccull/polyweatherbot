@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config import Config
 from db.engine import get_session
@@ -23,6 +23,7 @@ class TradeExecutor:
         self._portfolio = portfolio
         self._tracker = tracker
         self._clob_client = None
+        self._missing_orderbook_until: dict[str, datetime] = {}
 
     def init_client(self) -> None:
         """Initialize the CLOB client with POLY_PROXY credentials."""
@@ -498,11 +499,31 @@ class TradeExecutor:
         if self._clob_client is None:
             return None
 
+        now = datetime.utcnow()
+        blocked_until = self._missing_orderbook_until.get(token_id)
+        if blocked_until is not None and blocked_until > now:
+            return None
+        if blocked_until is not None and blocked_until <= now:
+            self._missing_orderbook_until.pop(token_id, None)
+
         try:
             book = self._clob_client.get_order_book(token_id)
+            self._missing_orderbook_until.pop(token_id, None)
             return book
         except Exception as e:
-            log.warning("order_book_fetch_failed", error=str(e), token_id=token_id)
+            err = str(e)
+            if "No orderbook exists for the requested token id" in err:
+                cooldown = max(30, int(self._config.orderbook_404_cooldown_seconds))
+                retry_at = now + timedelta(seconds=cooldown)
+                self._missing_orderbook_until[token_id] = retry_at
+                log.debug(
+                    "order_book_missing",
+                    token_id=token_id,
+                    cooldown_seconds=cooldown,
+                    retry_after=retry_at.isoformat(),
+                )
+                return None
+            log.warning("order_book_fetch_failed", error=err, token_id=token_id)
             return None
 
     def refresh_prices(self, token_id: str) -> tuple[float | None, float | None, float, float]:

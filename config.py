@@ -80,6 +80,7 @@ class Config:
     ws_reconnect_seconds: int = 5
     ws_ping_interval: int = 20
     market_price_max_age: int = 5
+    orderbook_404_cooldown_seconds: int = 900
 
     # Tunable parameters
     min_confidence: TunableParam = field(
@@ -202,6 +203,9 @@ class Config:
         cfg.ws_reconnect_seconds = int(os.getenv("WS_RECONNECT_SECONDS", str(cfg.ws_reconnect_seconds)))
         cfg.ws_ping_interval = int(os.getenv("WS_PING_INTERVAL", str(cfg.ws_ping_interval)))
         cfg.market_price_max_age = int(os.getenv("MARKET_PRICE_MAX_AGE", str(cfg.market_price_max_age)))
+        cfg.orderbook_404_cooldown_seconds = int(
+            os.getenv("ORDERBOOK_404_COOLDOWN_SECONDS", str(cfg.orderbook_404_cooldown_seconds))
+        )
         cfg.dynamic_max_bet_enabled = _env_bool("DYNAMIC_MAX_BET_ENABLED", cfg.dynamic_max_bet_enabled)
         cfg.dynamic_max_bet_pct = float(os.getenv("DYNAMIC_MAX_BET_PCT", str(cfg.dynamic_max_bet_pct)))
         cfg.dynamic_max_bet_floor = float(os.getenv("DYNAMIC_MAX_BET_FLOOR", str(cfg.dynamic_max_bet_floor)))

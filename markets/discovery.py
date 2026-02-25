@@ -182,6 +182,9 @@ class MarketDiscovery:
 
     def _parse_temp_buckets(self, sub_market: dict, market: DiscoveredMarket) -> None:
         """Extract bucket info from a sub-market within a temperature event."""
+        if not self._is_tradable_sub_market(sub_market):
+            return
+
         question = sub_market.get("question", "")
         condition_id = sub_market.get("conditionId", "")
 
@@ -250,6 +253,9 @@ class MarketDiscovery:
 
     def _parse_precip_buckets(self, sub_market: dict, market: DiscoveredPrecipMarket) -> None:
         """Extract bucket info from a sub-market within a precipitation event."""
+        if not self._is_tradable_sub_market(sub_market):
+            return
+
         question = sub_market.get("question", "")
         condition_id = sub_market.get("conditionId", "")
 
@@ -287,6 +293,46 @@ class MarketDiscovery:
             except (ValueError, TypeError):
                 return [v.strip() for v in value.split(",") if v.strip()]
         return []
+
+    @staticmethod
+    def _is_tradable_sub_market(sub_market: dict) -> bool:
+        """Return True when a market bucket appears currently tradable on CLOB."""
+        if MarketDiscovery._as_bool(sub_market.get("closed"), default=False):
+            return False
+        if MarketDiscovery._as_bool(sub_market.get("archived"), default=False):
+            return False
+        if not MarketDiscovery._as_bool(sub_market.get("active"), default=True):
+            return False
+
+        accepting = sub_market.get("acceptingOrders")
+        if accepting is None:
+            accepting = sub_market.get("accepting_orders")
+        if accepting is not None and not MarketDiscovery._as_bool(accepting, default=True):
+            return False
+
+        orderbook_enabled = sub_market.get("enableOrderBook")
+        if orderbook_enabled is None:
+            orderbook_enabled = sub_market.get("enable_order_book")
+        if orderbook_enabled is not None and not MarketDiscovery._as_bool(orderbook_enabled, default=True):
+            return False
+
+        return True
+
+    @staticmethod
+    def _as_bool(value, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            val = value.strip().lower()
+            if val in ("true", "1", "yes", "y", "t"):
+                return True
+            if val in ("false", "0", "no", "n", "f", ""):
+                return False
+        return default
 
     async def close(self) -> None:
         await self._client.aclose()
