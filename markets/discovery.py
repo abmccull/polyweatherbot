@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
@@ -22,6 +23,7 @@ from weather.station_map import lookup_city
 log = get_logger("discovery")
 
 GAMMA_EVENTS_URL = "https://gamma-api.polymarket.com/events"
+GAMMA_EVENTS_FALLBACK_URL = "https://gamma-api.polymarket.com/events"
 
 
 @dataclass
@@ -75,13 +77,19 @@ class MarketDiscovery:
 
     def __init__(self) -> None:
         self._client = httpx.AsyncClient(timeout=30.0)
+        self._last_scan_error: str | None = None
 
-    async def scan(self) -> list[DiscoveredMarket]:
+    @property
+    def last_scan_error(self) -> str | None:
+        return self._last_scan_error
+
+    async def scan(self) -> list[DiscoveredMarket] | None:
         """Query Gamma API for open temperature events and parse them."""
         markets: list[DiscoveredMarket] = []
 
         try:
             all_events = await self._fetch_all_events()
+            self._last_scan_error = None
             log.info("gamma_events_fetched", total=len(all_events))
 
             for event in all_events:
@@ -90,17 +98,20 @@ class MarketDiscovery:
                     markets.append(market)
 
         except httpx.HTTPError as e:
+            self._last_scan_error = str(e)
             log.error("gamma_scan_failed", error=str(e))
+            return None
 
         log.info("temperature_markets_found", count=len(markets))
         return markets
 
-    async def scan_precip(self) -> list[DiscoveredPrecipMarket]:
+    async def scan_precip(self) -> list[DiscoveredPrecipMarket] | None:
         """Query Gamma API for open precipitation events and parse them."""
         markets: list[DiscoveredPrecipMarket] = []
 
         try:
             all_events = await self._fetch_all_events()
+            self._last_scan_error = None
 
             for event in all_events:
                 market = self._parse_precip_event(event)
@@ -108,7 +119,9 @@ class MarketDiscovery:
                     markets.append(market)
 
         except httpx.HTTPError as e:
+            self._last_scan_error = str(e)
             log.error("gamma_precip_scan_failed", error=str(e))
+            return None
 
         log.info("precipitation_markets_found", count=len(markets))
         return markets
@@ -117,15 +130,23 @@ class MarketDiscovery:
         """Fetch all open events from Gamma API, paginating as needed."""
         offset = 0
         limit = 100
-        all_events = []
+        all_events: list[dict] = []
+        endpoints = [GAMMA_EVENTS_URL]
+        if GAMMA_EVENTS_FALLBACK_URL not in endpoints:
+            endpoints.append(GAMMA_EVENTS_FALLBACK_URL)
+        params_variants = (
+            {"closed": "false"},
+            {"active": "true"},
+            {},
+        )
 
         while True:
-            resp = await self._client.get(
-                GAMMA_EVENTS_URL,
-                params={"closed": "false", "limit": limit, "offset": offset},
+            events = await self._fetch_events_page(
+                endpoints=endpoints,
+                params_variants=params_variants,
+                limit=limit,
+                offset=offset,
             )
-            resp.raise_for_status()
-            events = resp.json()
             if not events:
                 break
             all_events.extend(events)
@@ -134,6 +155,52 @@ class MarketDiscovery:
             offset += limit
 
         return all_events
+
+    async def _fetch_events_page(
+        self,
+        endpoints: list[str],
+        params_variants: tuple[dict[str, str], ...],
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        """Fetch one paginated events page with fallback params/endpoints."""
+        last_error: Exception | None = None
+        for endpoint in endpoints:
+            for params_base in params_variants:
+                params: dict[str, str | int] = {
+                    "limit": limit,
+                    "offset": offset,
+                    **params_base,
+                }
+                try:
+                    resp = await self._client.get(endpoint, params=params)
+                    resp.raise_for_status()
+                    payload = resp.json()
+                    if isinstance(payload, list):
+                        if params_base != {"closed": "false"} or endpoint != GAMMA_EVENTS_URL:
+                            log.warning(
+                                "gamma_events_fallback_used",
+                                endpoint=endpoint,
+                                params=params_base,
+                                offset=offset,
+                            )
+                        return payload
+                    raise httpx.HTTPError(
+                        f"Unexpected events payload type: {type(payload).__name__}",
+                    )
+                except httpx.HTTPStatusError as e:
+                    last_error = e
+                    # 404s are often transient on one query shape; try fallbacks.
+                    if e.response.status_code == 404:
+                        continue
+                    raise
+                except httpx.HTTPError as e:
+                    last_error = e
+                    continue
+
+        if last_error is not None:
+            raise last_error
+        raise httpx.HTTPError("Gamma events page fetch failed with unknown error")
 
     def _parse_temp_event(self, event: dict) -> DiscoveredMarket | None:
         """Parse a single Gamma API event into a DiscoveredMarket (temperature)."""

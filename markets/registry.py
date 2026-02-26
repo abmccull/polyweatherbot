@@ -54,6 +54,14 @@ class MarketRegistry:
     async def refresh(self) -> None:
         """Re-scan for markets and update the registry."""
         discovered = await self._discovery.scan()
+        if discovered is None:
+            log.warning(
+                "market_refresh_skipped",
+                reason="scan_failed",
+                existing_markets=len(self._markets),
+                error=getattr(self._discovery, "last_scan_error", None),
+            )
+            return
         now = datetime.utcnow()
 
         # Build new set of event IDs
@@ -82,6 +90,14 @@ class MarketRegistry:
     async def refresh_precip(self) -> None:
         """Re-scan for precipitation markets and update the registry."""
         discovered = await self._discovery.scan_precip()
+        if discovered is None:
+            log.warning(
+                "precip_market_refresh_skipped",
+                reason="scan_failed",
+                existing_markets=len(self._precip_markets),
+                error=getattr(self._discovery, "last_scan_error", None),
+            )
+            return
         now = datetime.utcnow()
 
         new_ids = {m.event_id for m in discovered}
