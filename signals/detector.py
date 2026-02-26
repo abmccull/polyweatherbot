@@ -88,13 +88,24 @@ class SignalDetector:
         """Scan all active markets and detect trade signals."""
         signals: list[TradeSignal] = []
         candidates: list[SignalCandidate] = []
-        max_price = self._config.max_price.value
-        min_price = self._config.min_price
-        min_confidence = self._config.min_confidence.value
+        (
+            min_price,
+            max_price,
+            min_confidence,
+            metar_max_age_minutes,
+            geq_min_hour,
+            leq_min_hour,
+        ) = self._effective_signal_gates()
 
         for active in self._registry.get_all_active():
             market_signals, market_candidates = await self._check_market(
-                active, min_price, max_price, min_confidence,
+                active,
+                min_price,
+                max_price,
+                min_confidence,
+                metar_max_age_minutes,
+                geq_min_hour,
+                leq_min_hour,
             )
             signals.extend(market_signals)
             candidates.extend(market_candidates)
@@ -112,6 +123,9 @@ class SignalDetector:
         min_price: float,
         max_price: float,
         min_confidence: float,
+        metar_max_age_minutes: float,
+        geq_min_hour: int,
+        leq_min_hour: int,
     ) -> tuple[list[TradeSignal], list[SignalCandidate]]:
         """Check a single market for signals with all 7 gates."""
         market = active.market
@@ -145,12 +159,12 @@ class SignalDetector:
         metar_age_seconds = (now_utc - daily_high.last_obs_time).total_seconds()
         metar_age_minutes = metar_age_seconds / 60.0
 
-        if metar_age_minutes > self._config.metar_max_age_minutes:
+        if metar_age_minutes > metar_max_age_minutes:
             log.debug(
                 "metar_stale",
                 station=market.icao,
                 age_min=round(metar_age_minutes, 1),
-                max_age=self._config.metar_max_age_minutes,
+                max_age=metar_max_age_minutes,
             )
             return signals, candidates
 
@@ -192,7 +206,7 @@ class SignalDetector:
                 # Only valid once peak heating has started (noon+).
                 # Before noon, temps are still rising and daily high is
                 # just the morning reading — meaningless.
-                if hour < self._config.geq_min_hour:
+                if hour < geq_min_hour:
                     candidates.append(self._build_candidate(
                         market=market,
                         bucket_type=bucket.bucket_type,
@@ -204,7 +218,7 @@ class SignalDetector:
                         metar_age_minutes=metar_age_minutes,
                         local_hour_val=hour,
                         status="TIME_GATE_BLOCKED",
-                        reason=f"geq_before_{self._config.geq_min_hour}",
+                        reason=f"geq_before_{geq_min_hour}",
                     ))
                     continue
 
@@ -213,7 +227,7 @@ class SignalDetector:
                 # Edge: peak heating has ENDED and temp stayed below X.
                 # Only valid after peak heating passes (5 PM+).
                 # Before that, temp could still rise above X.
-                if hour < self._config.leq_min_hour:
+                if hour < leq_min_hour:
                     candidates.append(self._build_candidate(
                         market=market,
                         bucket_type=bucket.bucket_type,
@@ -225,7 +239,7 @@ class SignalDetector:
                         metar_age_minutes=metar_age_minutes,
                         local_hour_val=hour,
                         status="TIME_GATE_BLOCKED",
-                        reason=f"leq_before_{self._config.leq_min_hour}",
+                        reason=f"leq_before_{leq_min_hour}",
                     ))
                     continue
 
@@ -554,3 +568,29 @@ class SignalDetector:
     def reset_emitted(self) -> None:
         """Clear emitted signals cache (e.g., at start of new day)."""
         self._emitted.clear()
+
+    def _effective_signal_gates(self) -> tuple[float, float, float, float, int, int]:
+        """Return active signal gate values, optionally relaxed in shadow mode."""
+        min_price = self._config.min_price
+        max_price = self._config.max_price.value
+        min_confidence = self._config.min_confidence.value
+        metar_max_age_minutes = self._config.metar_max_age_minutes
+        geq_min_hour = self._config.geq_min_hour
+        leq_min_hour = self._config.leq_min_hour
+
+        if self._config.shadow_expansion_enabled:
+            min_price = min(min_price, self._config.shadow_min_price)
+            max_price = max(max_price, self._config.shadow_max_price)
+            min_confidence = min(min_confidence, self._config.shadow_min_confidence)
+            metar_max_age_minutes = max(metar_max_age_minutes, self._config.shadow_metar_max_age_minutes)
+            geq_min_hour = min(geq_min_hour, self._config.shadow_geq_min_hour)
+            leq_min_hour = min(leq_min_hour, self._config.shadow_leq_min_hour)
+
+        return (
+            min_price,
+            max_price,
+            min_confidence,
+            metar_max_age_minutes,
+            geq_min_hour,
+            leq_min_hour,
+        )

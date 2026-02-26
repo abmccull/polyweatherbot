@@ -161,6 +161,19 @@ class Config:
     geq_min_hour: int = 12                # Earliest local hour for geq signals (noon)
     leq_min_hour: int = 17                # Earliest local hour for leq signals (after peak heating)
 
+    # Shadow expansion mode (increase opportunity flow with strict caps)
+    shadow_expansion_enabled: bool = False
+    shadow_min_confidence: float = 0.78
+    shadow_min_price: float = 0.20
+    shadow_max_price: float = 0.75
+    shadow_metar_max_age_minutes: float = 45.0
+    shadow_geq_min_hour: int = 9
+    shadow_leq_min_hour: int = 15
+    shadow_max_bet_usd: float = 25.0
+    shadow_max_bankroll_pct: float = 0.03
+    shadow_min_expected_edge: float = 0.03
+    shadow_min_expected_profit: float = 0.25
+
     # Circuit breaker
     consecutive_loss_limit: int = 4
     circuit_breaker_hours: float = 1.5
@@ -267,6 +280,25 @@ class Config:
         cfg.ev_depth_slippage_max = float(os.getenv("EV_DEPTH_SLIPPAGE_MAX", str(cfg.ev_depth_slippage_max)))
         cfg.ev_spread_weight = float(os.getenv("EV_SPREAD_WEIGHT", str(cfg.ev_spread_weight)))
         cfg.ev_dynamic_slippage = _env_bool("EV_DYNAMIC_SLIPPAGE", cfg.ev_dynamic_slippage)
+        cfg.shadow_expansion_enabled = _env_bool("SHADOW_EXPANSION_ENABLED", cfg.shadow_expansion_enabled)
+        cfg.shadow_min_confidence = float(os.getenv("SHADOW_MIN_CONFIDENCE", str(cfg.shadow_min_confidence)))
+        cfg.shadow_min_price = float(os.getenv("SHADOW_MIN_PRICE", str(cfg.shadow_min_price)))
+        cfg.shadow_max_price = float(os.getenv("SHADOW_MAX_PRICE", str(cfg.shadow_max_price)))
+        cfg.shadow_metar_max_age_minutes = float(
+            os.getenv("SHADOW_METAR_MAX_AGE_MINUTES", str(cfg.shadow_metar_max_age_minutes))
+        )
+        cfg.shadow_geq_min_hour = int(os.getenv("SHADOW_GEQ_MIN_HOUR", str(cfg.shadow_geq_min_hour)))
+        cfg.shadow_leq_min_hour = int(os.getenv("SHADOW_LEQ_MIN_HOUR", str(cfg.shadow_leq_min_hour)))
+        cfg.shadow_max_bet_usd = float(os.getenv("SHADOW_MAX_BET_USD", str(cfg.shadow_max_bet_usd)))
+        cfg.shadow_max_bankroll_pct = float(
+            os.getenv("SHADOW_MAX_BANKROLL_PCT", str(cfg.shadow_max_bankroll_pct))
+        )
+        cfg.shadow_min_expected_edge = float(
+            os.getenv("SHADOW_MIN_EXPECTED_EDGE", str(cfg.shadow_min_expected_edge))
+        )
+        cfg.shadow_min_expected_profit = float(
+            os.getenv("SHADOW_MIN_EXPECTED_PROFIT", str(cfg.shadow_min_expected_profit))
+        )
         cfg.hard_stop_loss_enabled = _env_bool("HARD_STOP_LOSS_ENABLED", cfg.hard_stop_loss_enabled)
         cfg.hard_stop_loss_pct = float(os.getenv("HARD_STOP_LOSS_PCT", str(cfg.hard_stop_loss_pct)))
         cfg.initial_bankroll = float(os.getenv("INITIAL_BANKROLL", "200.0"))

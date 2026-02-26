@@ -154,6 +154,55 @@ def test_dynamic_slippage_uses_tracker_estimate(db_session):
 
 
 @pytest.mark.asyncio
+async def test_shadow_mode_caps_position_size(db_session):
+    cfg = Config(
+        dry_run=True,
+        initial_bankroll=1000.0,
+        kelly_mode=False,
+        enable_ev_gate=True,
+        min_expected_edge=0.01,
+        min_expected_profit=0.01,
+        shadow_expansion_enabled=True,
+        shadow_max_bet_usd=6.0,
+        shadow_max_bankroll_pct=0.02,
+        shadow_min_expected_edge=0.02,
+        shadow_min_expected_profit=0.05,
+    )
+    portfolio = Portfolio(cfg)
+    executor = TradeExecutor(cfg, portfolio, tracker=None)
+
+    sig = _signal(price=0.40, q=0.90, best_bid=0.39, ask_depth=1000.0)
+    trade = await executor.execute(sig)
+    assert trade is not None
+    assert trade.cost <= 6.0 + 1e-9
+    assert trade.cost >= cfg.min_bet
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_uses_stricter_ev_thresholds(db_session):
+    cfg = Config(
+        dry_run=True,
+        initial_bankroll=1000.0,
+        kelly_mode=False,
+        enable_ev_gate=True,
+        min_expected_edge=0.0,
+        min_expected_profit=0.0,
+        shadow_expansion_enabled=True,
+        shadow_max_bet_usd=25.0,
+        shadow_max_bankroll_pct=0.05,
+        shadow_min_expected_edge=0.07,
+        shadow_min_expected_profit=0.20,
+    )
+    portfolio = Portfolio(cfg)
+    executor = TradeExecutor(cfg, portfolio, tracker=None)
+
+    # Raw edge is positive but below shadow minimum edge; should be blocked.
+    sig = _signal(price=0.55, q=0.62, best_bid=0.54, ask_depth=1000.0)
+    trade = await executor.execute(sig)
+    assert trade is None
+
+
+@pytest.mark.asyncio
 async def test_detector_persists_signal_candidates(db_session, monkeypatch):
     @dataclass
     class _Bucket:

@@ -143,6 +143,9 @@ class TradeExecutor:
                 performance_samples=performance_samples,
                 peak_value=self._portfolio.peak_value,
             )
+        size_usd = self._apply_shadow_size_cap(size_usd, portfolio_value, signal)
+        if size_usd <= 0:
+            return None
 
         # Expected value gate: require positive post-cost edge before risking capital.
         exp_edge, exp_profit, exp_slippage = self._estimate_trade_expectancy(
@@ -150,25 +153,26 @@ class TradeExecutor:
             price=price,
             size_usd=size_usd,
         )
+        min_expected_edge, min_expected_profit = self._effective_ev_thresholds()
         if self._config.enable_ev_gate:
-            if exp_edge < self._config.min_expected_edge:
+            if exp_edge < min_expected_edge:
                 log.info(
                     "trade_blocked_ev_edge",
                     city=signal.city,
                     token_id=signal.token_id,
                     expected_edge=round(exp_edge, 4),
                     win_probability=round(win_probability, 4),
-                    min_required=self._config.min_expected_edge,
+                    min_required=min_expected_edge,
                 )
                 return None
-            if exp_profit < self._config.min_expected_profit:
+            if exp_profit < min_expected_profit:
                 log.info(
                     "trade_blocked_ev_profit",
                     city=signal.city,
                     token_id=signal.token_id,
                     expected_profit=round(exp_profit, 3),
                     win_probability=round(win_probability, 4),
-                    min_required=self._config.min_expected_profit,
+                    min_required=min_expected_profit,
                 )
                 return None
 
@@ -493,6 +497,38 @@ class TradeExecutor:
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    def _effective_ev_thresholds(self) -> tuple[float, float]:
+        """Return EV thresholds, tightened when shadow expansion is enabled."""
+        min_edge = self._config.min_expected_edge
+        min_profit = self._config.min_expected_profit
+        if self._config.shadow_expansion_enabled:
+            min_edge = max(min_edge, self._config.shadow_min_expected_edge)
+            min_profit = max(min_profit, self._config.shadow_min_expected_profit)
+        return min_edge, min_profit
+
+    def _apply_shadow_size_cap(self, size_usd: float, portfolio_value: float, signal: TradeSignal) -> float:
+        """Cap risk in shadow mode to keep live sampling small and controlled."""
+        if size_usd <= 0:
+            return 0.0
+        if not self._config.shadow_expansion_enabled:
+            return size_usd
+
+        cap_abs = max(self._config.min_bet, self._config.shadow_max_bet_usd)
+        cap_pct = max(self._config.min_bet, portfolio_value * self._config.shadow_max_bankroll_pct)
+        cap = min(cap_abs, cap_pct)
+        if size_usd > cap:
+            log.info(
+                "shadow_size_capped",
+                city=signal.city,
+                token_id=signal.token_id,
+                original_size=round(size_usd, 2),
+                capped_size=round(cap, 2),
+                cap_abs=round(cap_abs, 2),
+                cap_pct=round(cap_pct, 2),
+            )
+            return cap
+        return size_usd
 
     def get_order_book(self, token_id: str) -> dict | None:
         """Fetch order book for a token. Returns {bids, asks} with depth."""
