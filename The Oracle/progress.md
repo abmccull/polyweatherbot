@@ -1,0 +1,562 @@
+Original prompt: PLEASE IMPLEMENT THIS PLAN: build The Oracle as a self-contained browser-first game workspace in `/Users/tsc-001/station_sniper/The Oracle`, including shared packages, deterministic simulation, persistence contracts, Phaser precinct scene, React UI shell, debug hooks, automated validation, and the first playable precinct plus consultation vertical slice.
+
+## Progress
+- Initialized implementation in a dedicated workspace under `The Oracle/`.
+- Locked toolchain around pnpm, Vite, Phaser, React, Electron Forge, TypeScript, Vitest, and IndexedDB/SQLite persistence ports.
+- Implemented the workspace packages: `apps/web`, `apps/desktop`, `packages/core`, `packages/content`, `packages/persistence`, `packages/ui`, and `packages/testkit`.
+- Implemented a deterministic core runtime with command reducers, tick-based simulation, resource state, building placement rules, walker movement, basic degradation, consultation generation, prophecy delivery, consequence scheduling, and save/load snapshots.
+- Implemented the browser runtime with Phaser graybox rendering, a responsive React HUD, consultation overlay, debug hooks, manual save/load controls, and a desktop scaffold.
+- Added unit tests for reducer rules, prophecy scoring/consequence resolution, and snapshot round-tripping.
+- Validated browser flows with Playwright artifacts under `output/playwright/`: precinct setup, priest assignment, consultation overlay, prophecy delivery, and save/load restoration.
+- Implemented the first logistics/reserve pass:
+  - storehouses now rebalance local oil/incense/grain buffers against the top-level reserve ledger
+  - carriers can pick up/deliver transfer jobs for brazier and sanctum demand
+  - building startup stock now folds into the shared reserve ledger
+  - brazier reserve consumption now uses actual burned oil instead of charging phantom upkeep
+- Added regression coverage for logistics delivery, reserve-ledger startup stock, trade purchases, and unique event-feed keys.
+- Fixed event-feed React key collisions by consuming the shared `nextId` counter for feed entries.
+- Revalidated the logistics slice with:
+  - `pnpm typecheck`
+  - `pnpm test`
+  - `pnpm --filter @the-oracle/web build`
+  - Playwright client run under `output/web-game-logistics-client*`
+  - full-page browser checkpoints under `output/playwright/logistics-slice/`
+- Implemented the first monthly politics/trade pass:
+  - month turnover now advances faction agendas, debt/favour/credibility, active conflicts, and trade access
+  - trade offers now rebuild from live faction politics instead of the earlier static stub
+  - the HUD includes a faction watchlist with agenda chips, trade status, and the latest monthly outcome text
+  - runtime day/month boundary side effects now trigger correctly from the real clock advance path
+- Revalidated the politics slice with:
+  - `pnpm typecheck`
+  - `pnpm test`
+  - `pnpm --filter @the-oracle/web build`
+  - month-two browser artifacts under `output/playwright/politics-slice/`
+- Expanded the consultation layer:
+  - added more omen templates and word tiles
+  - built category-aware tile-pool assembly instead of the earlier generic slice/sort pool
+  - scoring now rewards structured prophecies and punishes over-specific mismatches harder
+  - consequence reports now react to ambiguity and faction temperament
+  - the consultation overlay shows live risk/value guidance text
+- Revalidated the consultation slice with:
+  - `pnpm typecheck`
+  - `pnpm test`
+  - Playwright client run under `output/web-game-consultation-client/`
+  - browser artifacts under `output/playwright/consultation-slice/`
+- Implemented Pythia management and chronicle visibility:
+  - added `RestPythiaCommand` and `PurifyPythiaCommand`
+  - wired new Pythia action buttons into the HUD
+  - exposed Pythia stats plus a combined prophecy/consequence chronicle in `render_game_to_text`
+  - updated faction cards to show recent history instead of a single line only
+- Expanded faction history and monthly authored event output:
+  - added short faction history logs
+  - political events now use authored summary text instead of generic boilerplate
+  - monthly outcomes and delivered prophecies now append to visible faction history
+- Fixed a real timing bug in delayed consequences:
+  - prophecies and consequence deadlines now use an absolute-day index derived from the monotonic clock tick
+  - consequence resolution now survives month rollover
+  - the `consultation-ready` debug scenario now keeps `tick` synchronized with the injected calendar day
+- Revalidated the Pythia/chronicle slice with:
+  - `pnpm typecheck`
+  - `pnpm test`
+  - `pnpm --filter @the-oracle/web build`
+  - Playwright client runs under `output/web-game-pythia-client*`
+  - browser artifacts under `output/playwright/pythia-slice-absolute-day/`
+- Added direct precinct pointer automation:
+  - Phaser canvas now exposes a stable `#precinct-canvas` id/data-testid
+  - added `pnpm smoke:precinct` to drive real canvas placement/selection via `window.__oracleDebug.viewportForTile`
+  - the smoke flow places Sacred Way tiles, builds Quarters/Storehouse/Spring, selects the spring, assigns the priest, advances time, and captures state/screenshots
+- Revalidated the precinct smoke harness with:
+  - `pnpm smoke:precinct`
+  - artifacts under `output/playwright/precinct-smoke/`
+- Fixed the precinct tile-projection hook used by browser automation:
+  - `window.__oracleDebug.viewportForTile` now calibrates against Phaser's real camera transform instead of relying on the earlier naive projection math
+  - direct canvas clicks now land on the intended tiles instead of drifting several cells off
+- Expanded logistics beyond the first single-storehouse pass:
+  - resource jobs now choose the nearest stocked source building instead of hard-wiring the first storehouse
+  - storehouse-to-storehouse balancing jobs are now queued when one storehouse has a real surplus and another has a deficit
+  - reserve-buffer top-ups no longer mask multi-storehouse deficits when another storehouse can actually supply them
+- Added regression coverage for the new logistics rules:
+  - multi-storehouse rebalance jobs
+  - nearest-source selection for brazier and sanctum supply
+- Added cross-faction diplomatic spillover on prophecy delivery:
+  - rival, aligned, and trade-open factions now adjust favour/credibility/dependence after a delivered prophecy
+  - these observer reactions append to faction history and can surface in the event feed
+  - reducer coverage now asserts Athens reacts negatively to a favorable Sparta prophecy
+- Expanded pointer-driven browser automation into a full campaign smoke flow:
+  - added `pnpm smoke:campaign`
+  - the script builds the precinct slice with real canvas clicks, verifies carrier activity, selects the moving carrier, advances to day 15, opens a real consultation, delivers a prophecy, and captures artifacts
+- Revalidated the remaining chunks with:
+  - `pnpm typecheck`
+  - `pnpm test`
+  - `pnpm --filter @the-oracle/web build`
+  - Playwright client run under `output/web-game-remaining-client/`
+  - browser artifacts under `output/playwright/campaign-smoke/`
+  - refreshed precinct artifacts under `output/playwright/precinct-smoke/`
+- Added consequence-resolution diplomacy and deeper live-campaign validation:
+  - non-consulted factions now react after consequences resolve, not only at prophecy delivery
+  - resolved consequences append both the city outcome report and the strongest observer reaction into the event feed
+  - added unit/integration coverage so rival factions now shift after a vindicated or failed prophecy ripens
+- Expanded the campaign smoke into a full save/load plus delayed-consequence browser flow:
+  - `pnpm smoke:campaign` now pauses deterministically, saves during active logistics, reloads from browser persistence, reaches a real consultation, chooses a stronger prophecy tile set, delivers it, saves/reloads again, and advances through the due day
+  - the smoke now asserts restored live state, persistent pending consequences, chronicle resolution, and downstream faction-history changes after consequence fallout
+  - current artifacts include `state-logistics-reloaded.json`, `state-delivered-reloaded.json`, `state-resolved.json`, and matching full-page screenshots under `output/playwright/campaign-smoke/`
+- Tightened the browser/runtime boot path:
+  - Phaser is now lazy-loaded from the React shell so the initial app chunk stays small and the engine lives in its own `createGame`/`phaser-core` path
+  - the web build now completes without the old chunk-size warning by isolating Phaser and raising the warning threshold to the measured lazy engine payload
+  - kept the stable bundled Phaser entry after the source-tree experiment broke the dev runtime on `require('phaser3spectorjs')`
+- Revalidated this checkpoint with:
+  - `pnpm test`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:campaign`
+  - `pnpm smoke:precinct`
+  - Playwright client run under `output/web-game-final-client/`
+- Expanded logistics staffing and prioritization:
+  - resource jobs now carry explicit `critical` / `high` / `routine` priority instead of behaving as an undifferentiated queue
+  - sacred-building supply jobs now outrank routine storehouse rebalancing
+  - the sim can now spawn additional carrier walkers as the precinct grows past one storehouse and the logistics queue thickens
+  - `render_game_to_text` now exposes resource-job priority for browser validation
+- Added stronger faction differentiation to politics and trade:
+  - factions now carry explicit profiles (`martial`, `mercantile`, `devout`, `scheming`) plus a favored trade resource
+  - month-turnover agenda pressure, debt/favour/credibility shifts, trade access, and monthly summaries now respond to those profiles instead of all factions using the same generic weighting
+  - trade offers now favor faction-specialty resources and mercantile factions now push larger, cheaper caravan terms than martial peers with the same raw stats
+  - the faction cards and `render_game_to_text` payload now surface faction profile + favored resource data
+- Revalidated the logistics/politics differentiation pass with:
+  - `pnpm test`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:campaign`
+  - Playwright client run under `output/web-game-phase-continue-client/`
+- Added deeper faction-to-faction politics:
+  - factions now carry bilateral relation maps instead of only agenda/conflict flags
+  - conflict targeting now prefers the worst real rival instead of pure randomness
+  - monthly politics now nudges relations up or down based on open trade, shared faith pressure, and live conflicts
+  - prophecy delivery and consequence fallout now shift observer-to-target relations in addition to favour/credibility/dependence
+  - the HUD and `render_game_to_text` now expose ally/rival summaries so browser automation can see the diplomatic structure directly
+- Expanded browser validation further:
+  - `pnpm smoke:campaign` now asserts visible faction-card text (`favors ...`, ally/rival lines), assembled prophecy text, consultation score text, and a final save/load after consequence resolution
+  - resolved-consequence saves now round-trip without reintroducing pending consequence timers
+- Revalidated the relations/UI pass with:
+  - `pnpm test`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:campaign`
+  - Playwright client run under `output/web-game-relations-client/`
+- Added a first real treaty / embargo layer on top of bilateral relations:
+  - faction state now tracks `treaties` and `embargoes`, not only raw relation scores
+  - month-turnover diplomacy now derives treaty webs and embargo blocs from live relations, conflicts, agendas, and faction profiles
+  - treaty / embargo counts now feed back into `tradeAccess`, trade amounts, and caravan pricing
+  - monthly faction summaries and faction history now record treaty openings, embargo pressure, and diplomatic easing
+  - browser-facing state and cards now surface treaty / embargo summaries alongside ally / rival lines
+- Added a focused multi-storehouse logistics browser scenario:
+  - added the deterministic `logistics-lab` debug scenario with two storehouses, stacked sacred demand, and enough queued work to force extra carrier staffing
+  - the HUD now shows carrier count and priority-ordered job rows so the browser can prove critical jobs are sorted ahead of routine rebalancing
+  - added `pnpm smoke:logistics`, which injects the lab scenario, validates three active carriers, validates visible critical/routine job ordering, selects a live carrier in the Phaser scene, and captures artifacts under `output/playwright/logistics-smoke/`
+- Hardened save compatibility for the evolving faction model:
+  - browser snapshot deserialization now normalizes missing `relations`, `treaties`, `embargoes`, and `history` arrays when loading older saves
+- Revalidated the diplomacy/logistics lab pass with:
+  - `pnpm test`
+  - `pnpm typecheck`
+  - `pnpm smoke:logistics`
+  - `pnpm smoke:campaign`
+  - `pnpm smoke:precinct`
+  - `pnpm --filter @the-oracle/web build`
+  - Playwright client run under `output/web-game-diplomacy-logistics-client/`
+- Expanded consultation guidance and browser coverage:
+  - core selectors now derive consultation insight summaries from live omen reliability, polarity/domain agreement, and placed tile structure
+  - `render_game_to_text` now exposes consultation omen summary, guidance text, and risk warning text for browser verification
+  - the consultation overlay now shows a top-level omen summary, per-omen reliability tiers plus semantic tags, a standing guidance banner, and a separate explicit risk warning
+  - added `packages/core/tests/consultation.test.ts` to lock contradictory/fragile vs. aligned/clear guidance behavior
+  - added `pnpm smoke:consultation`, which opens a deterministic consultation, chooses a deliberately risky tile set, verifies omen summary / reliability / guidance / risk-warning UI text, delivers the prophecy, and captures artifacts under `output/playwright/consultation-smoke/`
+- Revalidated the consultation-guidance pass with:
+  - `pnpm test`
+  - `pnpm typecheck`
+  - `pnpm smoke:consultation`
+  - `pnpm smoke:campaign`
+  - `pnpm --filter @the-oracle/web build`
+  - Playwright client run under `output/web-game-consultation-guidance-client/`
+- Added mid-consultation save/load support and round-trip validation:
+  - the consultation overlay now exposes `Save Reading` and `Load Reading` controls so persistence remains reachable while the full-screen overlay is open
+  - `pnpm smoke:consultation` now saves after assembling a risky prophecy, reloads the app, loads the save, and verifies the open consultation state, placed tiles, assembled prophecy text, omen summary, guidance text, and risk warning all round-trip cleanly before delivery
+  - this closed a real UI gap: the top-bar save button was visible but effectively unreachable while the consultation overlay intercepted pointer events
+- Revalidated the consultation round-trip pass with:
+  - `pnpm typecheck`
+  - `pnpm smoke:consultation`
+  - `pnpm smoke:campaign`
+  - `pnpm --filter @the-oracle/web build`
+  - Playwright client run under `output/web-game-consultation-roundtrip-client/`
+- Implemented the narrower FR-2 living-world deepening slice in core state surfaces only:
+  - month turnover now layers philosophical drift, dominant-bloc hegemon pressure, and government/revolution destabilization onto faction history, monthly outcomes, trade terms, advisor messaging, and the event feed
+  - campaign pressure/crisis/world-node unrest now read those same faction-facing signals so hegemon squeeze, regime crises, and creed schisms surface on the world map without widening `GameState`
+  - `render_game_to_text` now includes a derived `world_summary` block for browser-facing hegemon, destabilization, ideological-drift, and crisis context
+  - added multi-month politics coverage plus a selector test to prove the world evolves and these outputs materially affect trade and campaign state
+- Deepened the logistics model with real carrier profiles and routing pressure:
+  - carriers now carry individual `fatigue`, `haulingSkill`, and `supplyRadius` stats in core state instead of behaving as identical workers
+  - browser snapshot loading now backfills those carrier fields for older saves
+  - carrier assignment now scores the best carrier/job pair globally, so critical long-haul jobs no longer get claimed purely by whichever carrier is iterated first
+  - dispatch scoring now considers priority, travel distance, radius overage, current fatigue, hauling skill, and shared hub pressure
+  - carriers build fatigue under load, recover while idle, and move slightly slower when heavily strained
+  - the HUD and `render_game_to_text` now expose carrier strain plus per-carrier fatigue / skill / radius values
+  - `pnpm smoke:logistics` now asserts those visible carrier stats and the mixed-radius fleet in the logistics lab scenario
+- Added regression coverage for the new logistics state:
+  - `packages/core/tests/logistics.test.ts` now proves fresh long-haul carriers can beat a nearer exhausted carrier and that idle carriers recover fatigue
+  - `packages/persistence/tests/schema.test.ts` now proves older saves missing carrier fields normalize correctly on load
+- Revalidated the carrier-profile logistics pass with:
+  - `pnpm test`
+  - `pnpm typecheck`
+  - `pnpm smoke:logistics`
+  - `pnpm smoke:campaign`
+  - `pnpm --filter @the-oracle/web build`
+  - Playwright client run under `output/web-game-carriers-client/`
+  - browser artifacts under `output/playwright/logistics-smoke/`
+- Added a repo-grounded parallel delivery plan for the full GDD gap:
+  - audited the current vertical slice against the game design document
+  - mapped the missing systems into wave-based workstreams
+  - assigned the work to locally available specialty sub agents plus a lead integrator in `docs/parallel-implementation-plan.md`
+- Added a post-prototype full-release roadmap based on the ideal-state design:
+  - reviewed `TheOracle_FullRelease.md` and treated it as the target state after the current implementation plan lands
+  - mapped the path from the assumed post-plan prototype to full release in `docs/full-release-follow-on-plan.md`
+  - sequenced the work into replayability, living-world simulation, deep-core systems, character society, late game, meta progression, tooling, and ship-scale tracks
+- Added a first-pass Meshy and pixel-art asset pipeline:
+  - fixed `scripts/art/pixel-art.mjs` so `proper-pixel-art` is invoked correctly with `-i/-o`
+  - added `pnpm art:pixel buildings` to batch-convert the full building render set into runtime-loadable PNGs
+  - wrote `35` converted building sprites plus `apps/web/public/assets/precinct/building-art-manifest.json`
+  - generated `packages/content/src/generated/buildingArt.ts` so UI/runtime code can consume the same registry instead of hardcoded asset paths
+  - updated `packages/ui/src/PrecinctArtThumb.tsx` to resolve art through `@the-oracle/content`
+  - added build-palette row thumbnails in `packages/ui/src/BuildPalette.tsx`
+  - revalidated the current art-integration checkpoint with `pnpm typecheck`, `pnpm --filter @the-oracle/web build`, and `pnpm smoke:precinct`
+  - confirmed the current live state visually in `output/playwright/precinct-smoke/precinct-smoke-full.png`: palette and selected-building art are live, but the actual precinct scene is still graybox and needs the sprite-backed `PrecinctScene` pass
+  - documented the current final usable building format and the runtime incorporation order in `docs/precinct-art-integration-plan.md`, `docs/asset-pipeline-setup.md`, and `docs/restart-context.md`
+  - added first-pass building-art thumbnail support in `packages/ui/src/BuildPalette.tsx` and `packages/ui/src/OracleHud.tsx`
+  - documented the real runtime integration path and blockers in `docs/precinct-art-integration-plan.md`
+  - landed sprite-backed building rendering in `apps/web/src/game/PrecinctScene.ts`, including preload/reconciliation against the generated building-art registry and graybox fallback for defs that still lack converted art
+  - added footprint-based sprite scaling so the current one-tile placement model can display the Blender-derived source renders without giant overlap
+  - added `window.__oracleDebug.getPrecinctArtDebug()` plus `output/playwright/precinct-smoke/art-debug.json` so live scene sprite counts, texture keys, scales, and display sizes are inspectable after smoke runs
+  - revalidated the sprite-backed precinct pass with `pnpm typecheck`, `pnpm --filter @the-oracle/web build`, and repeated `pnpm smoke:precinct`
+  - current state note: building sprites are now live in the map scene, but the overall precinct still reads as mixed-mode because terrain/roads/props remain graphics-based and pale assets still need contrast tuning against the parchment ground
+  - created `.env.example` for local Meshy configuration
+  - added `scripts/art/meshy.mjs` and `scripts/art/pixel-art.mjs`
+  - documented the workflow in `docs/meshy-art-pipeline.md` and `docs/asset-pipeline-setup.md`
+  - threaded the asset pipeline into both implementation roadmaps
+- Added a dedicated browser smoke for campaign/world-map validation:
+- Added the first full-release UI/setup layer without touching core simulation or persistence wiring:
+  - created parent-driven `RunSetupPanel` for origin selection, seed entry, start CTA, and generated-world preview summaries
+  - created `WorldInspectorPanel` for richer region/hegemon/philosophy/history/pressure inspection
+  - refactored `WorldMapPanel` to preserve the current `state`-driven campaign mode while adding a generic `preview` mode for future setup/world-generation payloads
+  - added shared world-preview types/props in `packages/ui/src/worldPreview.ts`
+  - extended `apps/web/src/styles.css` with matching parchment/bronze setup and inspector surfaces plus automation-friendly control IDs
+- Validation for the UI/setup layer:
+  - `pnpm -C '/Users/tsc-001/station_sniper/The Oracle' --filter @the-oracle/ui typecheck` passed
+  - workspace `pnpm -C '/Users/tsc-001/station_sniper/The Oracle' typecheck` is currently blocked by an existing `better-sqlite3` type-resolution error surfacing through `packages/persistence/src/SqliteProfileRepository.ts`, outside this UI-only scope
+  - added `pnpm smoke:worldmap` backed by `packages/testkit/scripts/worldmap-smoke.mjs`
+  - the smoke injects `campaign-lab` and `world-map-lab`, validates reputation tier/score, dedication count, selected world node, active pressure and crisis counts, visible campaign-atlas text, and save/load round-trips for the campaign state
+  - artifacts write under `output/playwright/worldmap-smoke/`
+- Landed DVG-3 campaign progression in the live month-turnover simulation:
+  - month turnover now advances campaign reputation from precinct prestige, consultation outcomes, diplomacy, and dedication momentum instead of leaving campaign state inert
+  - treasury dedication progress now accrues automatically from live reserve/trade/prestige conditions, triggers patron milestones, and records completed dedications in campaign state
+  - world-map pressures now derive from faction conflict/trade/consultation strain, update node pressure/unrest, and seed/escalate/resolve multi-step crisis chains
+  - `Rising Oracle` now has a real completion path: reach `revered`, complete at least one dedication, and resolve the first regional crisis chain
+  - expanded politics regression coverage now locks reputation tier unlocks, dedication milestones, crisis progression/resolution, and runtime month-turnover integration
+- Closed the remaining campaign-atlas QA gaps:
+  - the world-map panel now surfaces treasury investment progress toward the next dedication plus explicit win-condition label/summary text
+  - `packages/testkit/scripts/campaign-smoke.mjs` now waits for `window.__oracleDebug.viewportForTile` before the first precinct canvas click, removing a flaky Phaser-hook race
+- Revalidated the DVG-3 pass with:
+  - `pnpm --filter @the-oracle/core test -- tests/politics.test.ts`
+  - `pnpm typecheck`
+  - `pnpm smoke:worldmap`
+  - `pnpm smoke:campaign`
+
+## TODO
+- Expand the logistics model further:
+  - explicit reserve-to-storehouse dispatch remains abstract rather than embodied in a transport hub/building
+  - carrier profiles exist now, but there is still no fatigue-aware staffing UI or gameplay control over resting / rotating haulers
+  - global dispatch scoring now accounts for long hauls and shared hubs, but there is still no true road-congestion model or reserve-dispatch building gameplay
+- DVG-2 consultation depth pass landed:
+  - expanded omen families to include extispicy, oneiromancy, astromancy, and chresmology
+  - expanded consultation questions and word tiles for better subject/action/condition/modifier/seal coverage
+  - rewired consultation generation and scoring to use question tags plus Pythia mental clarity, trance depth, strain, and traits
+  - consultation overlay now groups tiles by role, surfaces a dedicated Pythia depth note, and keeps warning text visible for brittle long-form prophecies
+  - validated with `pnpm --filter @the-oracle/core typecheck`, `pnpm --filter @the-oracle/core test -- consultation consequence`, workspace `pnpm typecheck`, and escalated `pnpm smoke:consultation`
+- DVG-4 scene / HUD readability pass landed on top of the INT-0 foundation:
+  - added `PrecinctOverviewPanel` and `WorldMapPanel` to surface the new campaign/world-map scaffold in the live HUD
+  - improved scene feedback in `PrecinctScene` with selection halos, priest markers, condition bars, and clearer placement ghosting / targeting
+  - expanded the inspector with building category / unlock tier metadata, recipe/effect summaries, and walker assignment text
+  - retuned CSS so the dev-only debug panel no longer sits on top of the new right-rail world-map panel by default
+- DVG-4 validation:
+  - `pnpm typecheck`
+  - required `develop-web-game` Playwright client runs under `output/web-game-dvg4-client/` and `output/web-game-dvg4-client-final/`
+  - scoped full-page browser validation under `output/playwright/dvg4-precinct-smoke/` and `output/playwright/dvg4-precinct-smoke-final/`
+  - note: the generic headless canvas-only client capture still renders black on this macOS setup, but the full-page Playwright smoke artifact and state output validate the actual HUD/scene changes cleanly
+- Added a full tracked asset library and batch-generation scaffold:
+  - created `art-library/source/catalog.mjs` with 134 planned assets spanning buildings, props, terrain, flora, fauna, characters, portraits, and UI/world-map packs
+  - added `scripts/art/build-library.mjs` to emit `art-library/generated/asset-manifest.json`, `asset-manifest.csv`, summary docs, Meshy prompt packs, ImageGen prompt packs, and generated command scripts
+  - added `scripts/art/submit-library.mjs` for dry-run or live Meshy submission by wave/family/priority
+  - validated with `pnpm art:library` and a dry-run `pnpm art:submit -- --provider meshy --wave core_slice --limit 5`
+- Started producing real asset outputs from the new library:
+  - generated 5 `core_slice` OpenAI image assets under `output/art/imagegen/core_slice/` for terrain/tile references
+  - generated 5 advisor portraits under `output/art/imagegen/portraits-core/`
+  - generated 5 core character sheets under `output/art/imagegen/characters-core/`, including a strong Pythia turnaround/reference result
+  - submitted 6 Meshy text-to-3d preview tasks under `output/art/meshy/tasks/text-to-3d/`
+  - downloaded the first completed Meshy proxy asset to `output/art/meshy/downloads/text-to-3d/sacred_way_kit.glb`
+  - early quality note: portraits and character sheets are producing stronger immediately-usable outputs than terrain/tile prompts, which need another prompt-tuning pass before large-scale batch spending
+- Tightened the visual direction around a clearer ancient-Greece oracle style:
+  - added `docs/art-style-bible.md` to lock Delphi-inspired tone, material language, and anti-medieval / anti-mobile-game guardrails
+  - upgraded `art-library/source/catalog.mjs` prompt builders with stronger Hellenic historical grounding, cleaner negative prompts, and better terrain-module instructions
+  - added `scripts/art/rename-generated-batch.mjs` plus `pnpm art:rename` so generated files map back to asset IDs
+  - regenerated and renamed a tuned `core_slice` batch under `output/art/imagegen/core_slice_tuned/` with 30 assets spanning buildings, terrain, characters, portraits, and UI
+  - ran focused style probes under `output/art/imagegen/style-pass-ancient-greece-1/` and `output/art/imagegen/style-pass-terrain-2/`
+  - quality note: building, portrait, and character outputs are now strongly aligned with the intended Greek oracle vibe; terrain is much improved and now producing extraction-friendly stone modules rather than decorative mobile-style boards
+- Wired Blender MCP and era-variation planning into the asset flow:
+  - updated global MCP config targets for Codex / Claude Desktop and the user-root `.mcp.json` fallback
+  - added `docs/blender-mcp-integration.md` to define the 3D-proxy -> Blender -> render -> pixel cleanup lane
+  - expanded the art style bible with era-variation rules for `archaic`, `classical`, `hellenistic`, and `romanized` precinct evolution
+  - added `eraProfile` to buildable asset metadata so precinct art can evolve over campaign time without changing gameplay footprints
+- Expand consultation content: more omen templates, better tile pools, improved clarity/value/risk tuning, and richer consequence reports.
+- Keep refining the web bundling story if needed:
+  - Phaser is now lazy-loaded into its own chunk, but the engine payload is still large even though the warning is gone
+- Investigate the black canvas artifacts from the generic `$WEB_GAME_CLIENT` screenshots; direct full-page Playwright screenshots are currently the reliable visual artifact.
+- Expanded the building art pipeline and browser integration further:
+  - added `grain_field`, `olive_grove`, `incense_workshop`, and `papyrus_reed_bed` to `art-library/source/catalog.mjs`, regenerated the library to `138` total assets / `39` building assets, and added matching manual Blender blockouts in `scripts/art/blender/manual-blockout-asset.py`
+  - rendered those four missing gameplay buildings through Blender into `output/art/renders/manual/` and re-exported the runtime bundle to `39` browser-ready building PNGs plus updated manifests/registry
+  - extended world/UI art usage so `packages/ui/src/WorldMapPanel.tsx` now shows building unlock thumbnails via `PrecinctArtThumb`
+- Repaired the browser smoke harness after the HUD/layout refactor:
+  - added stable automation ids to `packages/ui/src/BottomToolbar.tsx`
+  - updated `precinct-smoke.mjs` and `campaign-smoke.mjs` to drive the bottom-toolbar category flow instead of the removed always-open palette
+  - updated `worldmap-smoke.mjs` and `consultation-smoke.mjs` to use overlay-trigger ids and `window.__oracleDebug.save/load()` instead of removed sidebar/save button selectors
+  - updated `campaign-smoke.mjs` faction-card assertions to match the current world overlay copy model
+- Revalidated the current art/runtime state with:
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct`
+  - `pnpm smoke:worldmap`
+  - `pnpm smoke:campaign`
+- Current artifact readout:
+  - `output/playwright/precinct-smoke/art-debug.json` now confirms `3` live building sprites in the precinct smoke (`priest_quarters`, `storehouse`, `castalian_spring`) with zero browser errors
+  - `output/playwright/worldmap-smoke/` and `output/playwright/campaign-smoke/` both finished with zero browser errors after the harness update
+  - the remaining visual blocker is readability, not wiring: the full-page precinct captures still show building sprites as small/pale against the parchment terrain, so the next pass should focus on sprite scale/anchor/contrast plus terrain/road/prop art
+- Improved the live precinct art quality substantially without breaking the scene automation:
+  - `scripts/art/export-building-pixel-assets.mjs` now prefers tuned imagegen building renders when present, keys the flat imagegen background to transparency, and writes trim metadata that `PrecinctScene` can use directly
+  - the runtime building bundle was regenerated successfully with `pnpm art:pixel-buildings`, and key assets like `castalian_spring`, `priest_quarters`, `storehouse`, `inner_sanctum`, `gatehouse_entrance`, and `eternal_flame_brazier` now use stronger runtime art instead of the earlier white/blender-proxy look
+  - `apps/web/src/game/PrecinctScene.ts` now maintains a first-pass `roadSprites` pool so Sacred Way tiles render with `sacred_way_kit` art instead of flat brown diamonds where runtime art is available
+  - `apps/web/src/game/PrecinctScene.ts` also softens the terrain palette / grid contrast so the map reads less like a debug board in full-page captures
+- Revalidated this art-quality checkpoint with:
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct`
+  - `pnpm smoke:campaign`
+- Current artifact readout after the scene-quality pass:
+  - `output/playwright/precinct-smoke/art-debug.json` now confirms `3` live building sprites plus `3` live road sprites in the precinct smoke
+  - `output/playwright/precinct-smoke/precinct-smoke-full.png` now shows materially stronger building silhouettes and live Sacred Way art instead of the earlier tiny white proxy cluster
+  - `output/playwright/campaign-smoke/built-full.png` confirms the same upgraded scene path works in the broader campaign flow
+- Remaining visual blocker after this pass:
+  - the scene is no longer blocked by building-art wiring; it is blocked by the unfinished ground layer and missing terrain/prop atlas work
+  - the next high-leverage pass should export real terrain textures from the existing tuned imagegen terrain sources, then add prop/clutter art so the precinct stops reading as strong buildings on top of a prototype board
+- Added a first real terrain runtime path on top of the building/road pass:
+  - created `scripts/art/export-terrain-runtime-assets.mjs`
+  - exported `dry_earth`, `limestone_terrace`, and `sacred_paving` into `output/art/pixel/terrain/` and `apps/web/public/assets/precinct/terrain/`
+  - generated `packages/content/src/generated/terrainArt.ts` and exported it from `packages/content/src/data.ts`
+  - added `pnpm art:pixel-terrain` to the root package scripts
+- Integrated the first terrain usage into `apps/web/src/game/PrecinctScene.ts`:
+  - the initial full-board terrain tiling test was rejected because it made the map look worse
+  - replaced that with a localized terrain-accent pass that only grounds roads, built tiles, and immediate neighbors
+  - kept the softer terrain diamond base for the rest of the map, so the board is still readable without turning into a repeated pattern wall
+- Revalidated the terrain checkpoint with:
+  - `pnpm art:pixel-terrain`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct`
+  - `pnpm smoke:campaign`
+- Current artifact readout after the terrain pass:
+  - `output/playwright/precinct-smoke/art-debug.json` now confirms `16` live terrain sprites, `3` live road sprites, and `3` live building sprites
+  - `output/playwright/precinct-smoke/precinct-smoke-full.png` shows the live cluster grounded with localized paving/terrace art instead of floating on a bare debug grid
+  - `output/playwright/campaign-smoke/built-full.png` confirms the same localized terrain path survives the broader campaign flow
+- Remaining quality gap after this terrain pass:
+  - the terrain path now exists, but it is still an accent layer, not a finished atlas
+  - next pass should improve the terrain source extraction itself and add prop/clutter atlas support so the ground reads as designed environment rather than selectively dressed board space
+- Expanded the terrain runtime path again instead of jumping blindly to props:
+  - `scripts/art/export-terrain-runtime-assets.mjs` now also exports `retaining_wall` and `stone_stairs`, bringing the terrain runtime set to `5` assets
+  - `apps/web/src/game/PrecinctScene.ts` now computes a small precinct terrain context so terrain choice is no longer just “tile or neighbor”
+  - exact road tiles now use `sacred_paving`, occupied / adjacent build tiles use `limestone_terrace`, and the active cluster can also place first-pass `retaining_wall` and `stone_stairs` accents on its perimeter
+  - improved the terrain exporter background-key logic with a border-connected flood fill so terrain modules are less dependent on loose color-threshold guesses
+- Revalidated the terrain-perimeter checkpoint with:
+  - `pnpm art:pixel-terrain`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct`
+  - `pnpm smoke:campaign`
+- Current artifact readout after the perimeter pass:
+  - `output/playwright/precinct-smoke/art-debug.json` now confirms `18` live terrain sprites, `3` live road sprites, and `3` live building sprites
+  - `output/playwright/precinct-smoke/precinct-smoke-full.png` and `output/playwright/campaign-smoke/built-full.png` show the cluster with a more deliberate perimeter shape instead of only the earlier flat terrain accents
+- Remaining gap after this pass:
+  - this is still not the finished environment layer; the terrain modules are better staged, but the scene still needs cleaner source extraction and then real prop/clutter coverage
+- Added the next live precinct-art pass instead of stopping at terrain-only dressing:
+  - created `scripts/art/export-walker-runtime-assets.mjs`
+  - exported `priest`, `custodian`, `carrier`, and `pilgrim` runtime sprites into `output/art/pixel/walkers/` and `apps/web/public/assets/precinct/walkers/`
+  - generated `packages/content/src/generated/walkerArt.ts` and exported it from `packages/content/src/data.ts`
+  - expanded `scripts/art/export-terrain-runtime-assets.mjs` again so the runtime terrain set now includes `cliff_edge` and `spring_pool`, bringing the total terrain runtime set to `7`
+- Integrated the new scene assets into `apps/web/src/game/PrecinctScene.ts`:
+  - added walker preload + reconciliation so current live walker roles render as real sprites instead of only colored circles
+  - enlarged the live building footprint bounds slightly so the active sanctuary cluster reads less tiny in smoke captures
+  - added `cliff_edge` and `spring_pool` placement into the localized terrain-context pass
+  - fixed a real automation regression by freezing precinct auto-framing after the first canvas click; without that, `viewportForTile()` drifted during repeated smoke placements and later building clicks landed on the wrong row
+- Revalidated this runtime-art checkpoint with:
+  - `pnpm art:pixel-walkers`
+  - `pnpm art:pixel-terrain`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `node packages/testkit/scripts/precinct-smoke.mjs --url http://127.0.0.1:4174 --out-dir output/playwright/precinct-smoke-current`
+  - `pnpm smoke:campaign -- --url http://127.0.0.1:4174 --out-dir output/playwright/campaign-smoke-current`
+- Current artifact readout after the walker + terrain-expansion pass:
+  - `output/playwright/precinct-smoke-current/art-debug.json` now confirms `24` live terrain sprites, `3` live road sprites, `3` live building sprites, and `3` live walker sprites
+  - `output/playwright/precinct-smoke-current/precinct-smoke-full.png` shows the current live sanctuary stack with larger building silhouettes, walker figures, and the new spring/cliff terrain accents
+  - `output/playwright/campaign-smoke-current/built-full.png` confirms the same upgraded precinct scene survives the broader campaign flow with zero browser errors
+- Remaining blocker after this pass:
+  - the live scene is no longer missing buildings, roads, terrain accents, or walker art plumbing
+  - the real next visual blocker is prop/clutter coverage and fuller terrain composition so the precinct stops reading as an isolated focal cluster on a mostly empty board
+- Added the first live prop/clutter runtime path instead of leaving the new renders stranded on disk:
+  - created `scripts/art/export-prop-runtime-assets.mjs`
+  - exported `amphora_stack`, `bronze_tripod`, `market_stall_set`, `omphalos_stone`, `ritual_basin`, `stone_bench`, and `votive_offering_rack` into `output/art/pixel/props/` and `apps/web/public/assets/precinct/props/`
+  - generated `packages/content/src/generated/propArt.ts`, exported it from `packages/content/src/data.ts`, and added the root command `pnpm art:pixel-props`
+  - `apps/web/src/game/PrecinctScene.ts` now preloads prop textures and maintains a deterministic `propSprites` layer so clutter placement stays stable under smoke automation instead of drifting randomly
+  - the current decor rules place benches near the Sacred Way, storage clutter by storehouses/granaries, ritual clutter by springs/sanctums/altars, and market clutter by the agora when present
+- Revalidated the prop checkpoint with:
+  - `pnpm art:pixel-props`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct -- --url http://127.0.0.1:4174 --out-dir output/playwright/precinct-smoke-current`
+  - `pnpm smoke:campaign -- --url http://127.0.0.1:4174 --out-dir output/playwright/campaign-smoke-current`
+- Current artifact readout after the prop pass:
+  - `output/playwright/precinct-smoke-current/art-debug.json` now confirms `24` live terrain sprites, `3` live road sprites, `4` live prop sprites, `3` live building sprites, and `3` live walker sprites
+  - `output/playwright/precinct-smoke-current/precinct-smoke-full.png` now shows the first real clutter layer around the starter sanctuary instead of buildings sitting alone on dressed terrain
+  - `output/playwright/campaign-smoke-current/built-full.png` confirms the same prop layer survives the broader campaign flow with zero browser errors
+- Remaining gap after this pass:
+  - the live scene now has buildings, roads, terrain accents, walkers, and a first prop layer, but it is still not a finished precinct atlas
+  - the next high-leverage pass is broader environment composition: more prop variants, fuller terrain coverage, and then the remaining non-precinct families
+- Expanded the live prop/clutter layer with a second rendered Meshy batch:
+  - rendered `grain_sacks`, `oil_jars`, `incense_censer`, `offering_bowl`, and `votive_statue_small` through Blender MCP into `output/art/renders/meshy/`
+  - left `purification_font` out of the first prop bundle at that stage because it read too close to a miniature building without a stronger authored placement context
+  - expanded `scripts/art/export-prop-runtime-assets.mjs` so the prop runtime bundle now includes `12` assets instead of `7`
+  - updated `apps/web/src/game/PrecinctScene.ts` decor rules so the starter precinct can actually surface more of the new storage and ritual props instead of losing them all to occupied-tile collisions
+  - tightened the auto-frame slightly so the sanctuary cluster is not framed quite as loosely in smoke captures
+- Revalidated the expanded prop checkpoint with:
+  - `pnpm art:pixel-props`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct -- --url http://127.0.0.1:4174 --out-dir output/playwright/precinct-smoke-current`
+  - `pnpm smoke:campaign -- --url http://127.0.0.1:4174 --out-dir output/playwright/campaign-smoke-current`
+- Current artifact readout after the second prop pass:
+  - `output/playwright/precinct-smoke-current/art-debug.json` now confirms `24` live terrain sprites, `3` live road sprites, `9` live prop sprites, `3` live building sprites, and `3` live walker sprites
+  - `output/playwright/precinct-smoke-current/precinct-smoke-full.png` now shows the starter sanctuary with visible storage clutter and ritual statuary, not just a single bench plus basin
+  - `output/playwright/campaign-smoke-current/built-full.png` shows the larger precinct with the same denser clutter layer still rendering cleanly
+- Remaining gap after this pass:
+  - the prop layer is materially denser, but the precinct still needs a flora / rocky perimeter pass and broader terrain composition before it reads as a finished sanctuary environment
+- Landed the first live flora / rocky perimeter runtime layer instead of leaving the environment edge empty:
+  - created `scripts/art/export-flora-runtime-assets.mjs`, exported `cypress_tree`, `laurel_shrub`, `dry_grass_cluster`, and `rocky_outcrop` into `output/art/pixel/flora/` and `apps/web/public/assets/precinct/flora/`, generated `packages/content/src/generated/floraArt.ts`, and added the root command `pnpm art:pixel-flora`
+  - expanded `scripts/art/blender/manual-blockout-asset.py` with manual Blender fallback profiles for those four flora assets, then rendered their source `.png`, `.blend`, and `.json` files into `output/art/renders/manual/` and `output/art/blender-scenes/`
+  - updated `apps/web/src/game/PrecinctScene.ts` so the live scene now preloads flora art, places deterministic cypress/shrub/grass/rock dressing around the active precinct cluster, and includes those perimeter tiles in auto-framing instead of clipping them
+  - the first flora pass was too dense at `38` live flora sprites in the starter precinct, so I trimmed the placement budget to a cleaner `20`-sprite pass before locking the smoke artifacts
+- Revalidated the flora checkpoint with:
+  - `pnpm art:pixel-flora`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct -- --url http://127.0.0.1:4175 --out-dir output/playwright/precinct-smoke-current`
+  - `pnpm smoke:campaign -- --url http://127.0.0.1:4175 --out-dir output/playwright/campaign-smoke-current`
+- Current artifact readout after the flora pass:
+  - `output/playwright/precinct-smoke-current/art-debug.json` now confirms `24` live terrain sprites, `3` live road sprites, `20` live flora sprites, `9` live prop sprites, `3` live building sprites, and `3` live walker sprites
+  - `output/playwright/precinct-smoke-current/precinct-smoke-full.png` now shows the starter sanctuary with actual perimeter dressing instead of a hard stop from props into empty parchment
+  - `output/playwright/campaign-smoke-current/built-full.png` confirms the same flora layer survives the broader campaign flow with zero browser errors
+- Remaining gap after this pass:
+  - the precinct reads better than the prop-only version, but the environment layer still needs a fuller terrain atlas and more flora/prop variety before it reads like a finished authored sanctuary
+- Refined the terrain composition layer so the precinct has a clearer authored footprint instead of a floating asset cluster:
+  - updated `apps/web/src/game/PrecinctScene.ts` terrain-context logic to add a stone-core / dry-earth apron footprint around the active precinct cluster rather than relying only on occupied-tile accents
+  - protected the south approach corridor from flora placement so the Sacred Way entry reads as circulation space instead of decorative spill
+  - shifted part of that footprint from repeated terrain overlays into board-tint shaping, then tightened the dry-earth accents further so the ground reads less like stamped source art and more like a deliberate terrace edge
+  - the final terrain-overlay count for this pass dropped from `44` to `32` while keeping the new footprint visible
+- Revalidated the terrain-footprint checkpoint with:
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct -- --url http://127.0.0.1:4176 --out-dir output/playwright/precinct-smoke-current`
+  - `pnpm smoke:campaign -- --url http://127.0.0.1:4176 --out-dir output/playwright/campaign-smoke-current`
+- Current artifact readout after the terrain-footprint pass:
+  - `output/playwright/precinct-smoke-current/art-debug.json` now confirms `32` live terrain sprites, `3` live road sprites, `15` live flora sprites, `9` live prop sprites, `3` live building sprites, and `3` live walker sprites
+  - `output/playwright/precinct-smoke-current/precinct-smoke-full.png` now reads less like a floating building cluster and more like a sanctuary terrace with an actual ground footprint and clearer entry
+  - `output/playwright/campaign-smoke-current/built-full.png` confirms the same footprint logic survives the broader campaign flow with zero browser errors
+- Remaining gap after this pass:
+  - the environment composition is materially better, but the next blocker is terrain source variety and more authored perimeter/prop variation, not more basic placement plumbing
+- Expanded the terrain runtime from single-crop families into a variant-aware browser bundle:
+  - updated `scripts/art/export-terrain-runtime-assets.mjs` so `dry_earth`, `limestone_terrace`, and `sacred_paving` now export multiple runtime variants instead of one repeated texture each
+  - regenerated `packages/content/src/generated/terrainArt.ts` and the public terrain manifest so the live bundle now contains `15` terrain PNGs across `7` terrain families
+  - updated `apps/web/src/game/PrecinctScene.ts` preload, terrain selection, and debug output so terrain variants are chosen deterministically per tile and the smoke debug payload now includes live terrain texture keys
+  - tuned the tile-to-variant selector until the starter precinct actually exercised the full variant set instead of collapsing back onto only one or two crops
+- Revalidated the terrain-variant checkpoint with:
+  - `pnpm art:pixel-terrain`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct -- --url http://127.0.0.1:4177 --out-dir output/playwright/precinct-smoke-current`
+  - `pnpm smoke:campaign -- --url http://127.0.0.1:4177 --out-dir output/playwright/campaign-smoke-current`
+- Current artifact readout after the terrain-variant pass:
+  - `output/playwright/precinct-smoke-current/art-debug.json` now confirms `32` live terrain sprites, `15` unique terrain texture keys in the starter precinct, `3` live road sprites, `15` live flora sprites, `9` live prop sprites, `3` live building sprites, and `3` live walker sprites
+  - `output/playwright/precinct-smoke-current/precinct-smoke-full.png` now runs the same precinct footprint with visibly more ground variation instead of repeating one terrace crop across the sanctuary
+  - `output/playwright/campaign-smoke-current/built-full.png` confirms the same terrain-variant path survives the broader campaign flow with zero browser errors
+- Remaining gap after this pass:
+  - the repeated terrain-crop problem is materially reduced, but the next blocker is still a more authored terrain/flora/prop atlas rather than more scene plumbing
+- Expanded the live prop/clutter pass with one more real runtime asset and more intentional entry composition:
+  - updated `scripts/art/export-prop-runtime-assets.mjs` so `purification_font` is now exported into the runtime prop bundle from the existing manual Blender render, bringing the browser prop set to `13` assets
+  - updated `apps/web/src/game/PrecinctScene.ts` decor rules so the south approach now gets paired `purification_font` anchors, `priest_quarters` gets local furnishing, and `kitchen` / `xenon` have first placement hooks for the current prop bundle
+  - updated `apps/web/src/game/PrecinctScene.ts` flora rules so the approach gets explicit cypress framing plus apron rocks instead of relying only on generic perimeter selection
+  - tightened auto-frame again so the camera biases toward the sanctuary core and authored approach anchors instead of distant perimeter flora
+- Revalidated the authored-approach checkpoint with:
+  - `pnpm art:pixel-props`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct -- --url http://127.0.0.1:4178 --out-dir output/playwright/precinct-smoke-current`
+  - `pnpm smoke:campaign -- --url http://127.0.0.1:4178 --out-dir output/playwright/campaign-smoke-current`
+- Current artifact readout after the authored-approach pass:
+  - `output/playwright/precinct-smoke-current/art-debug.json` now confirms `32` live terrain sprites, `3` live road sprites, `18` live flora sprites, `12` live prop sprites, `3` live building sprites, and `3` live walker sprites
+  - `output/playwright/precinct-smoke-current/precinct-smoke-full.png` now shows the starter sanctuary with paired purification fonts and a more deliberate approach/perimeter composition instead of only generic roadside clutter
+  - `output/playwright/campaign-smoke-current/built-full.png` confirms the same authored-approach logic survives the broader campaign flow with zero browser errors
+- Remaining gap after this pass:
+  - the precinct reads more intentional than the previous generic clutter pass, but the next blocker is still broader authored terrain/flora/prop coverage rather than more pipeline plumbing
+- Completed a visual-polish integration pass across the live precinct, consultation, oracle, and world-atlas surfaces:
+  - added shared portrait runtime usage with `packages/ui/src/PortraitArt.tsx`
+  - exported `5` live runtime portraits with `pnpm art:pixel-portraits` into `apps/web/public/assets/precinct/portraits/`
+  - upgraded `packages/ui/src/ConsultationOverlay.tsx` to use portrait-backed supplicant and Pythia cards plus a clearer verdict rail
+  - upgraded `packages/ui/src/OracleOverlayPanel.tsx` to use portrait-backed envoy and Pythia surfaces instead of text-only slabs
+  - tightened `packages/ui/src/WorldMapPanel.tsx` focus hierarchy with a better selected-polis summary strip
+  - polished `packages/ui/src/OracleHud.tsx` and `apps/web/src/styles.css` toward a more layered bronze/parchment hierarchy
+  - tightened `apps/web/src/game/PrecinctScene.ts` framing, boosted building scale, softened distant board contrast, and moved the inspection readout off the sanctuary centerline
+- Revalidated the visual-polish checkpoint with:
+  - `pnpm art:pixel-portraits`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct -- --url http://127.0.0.1:4173 --out-dir output/playwright/precinct-smoke-current`
+  - `pnpm smoke:campaign -- --url http://127.0.0.1:4173 --out-dir output/playwright/campaign-smoke-current`
+  - `pnpm smoke:worldmap -- --url http://127.0.0.1:4173 --out-dir output/playwright/worldmap-smoke-current`
+- Current artifact readout after the visual-polish pass:
+  - `output/playwright/precinct-smoke-current/precinct-smoke-full.png` now shows a materially tighter, more legible sanctuary composition
+  - `output/playwright/campaign-smoke-current/consultation-open-full.png` now shows a portrait-backed consultation surface with much stronger hierarchy
+  - `output/playwright/campaign-smoke-current/built-full.png` confirms the tightened precinct framing survives the broader campaign flow
+  - `output/playwright/worldmap-smoke-current/world-map-lab-full.png` confirms the atlas panel survives the world flow with zero browser errors
+- Remaining gap after this pass:
+  - the game now has a credible polished vertical slice, but the full visual end-state still needs broader portrait coverage, more authored terrain/prop variation, and finish-layer FX before the whole catalog feels complete
+- Continued the visual finish pass with parallel agent work and local integration:
+  - expanded portrait runtime coverage from `5` to `8` assets via fallback-backed aliases for `croesus_portrait`, `alexander_portrait`, and `roman_envoy_portrait`
+  - updated `packages/ui/src/PortraitArt.tsx` portrait selection so more of the live faction set uses distinct faces instead of collapsing onto the same two portraits
+  - extended world-atlas usage of the portrait runtime set through `packages/ui/src/WorldOverlayPanel.tsx`
+  - strengthened the world overlay shell with a fuller strategy-surface treatment in `apps/web/src/styles.css`
+  - kept the tighter precinct framing and layered in lightweight ambient FX in `apps/web/src/game/PrecinctScene.ts` so the sanctuary now has shimmer/ember/ritual atmosphere instead of reading as purely static art
+  - fixed a brittle replay assertion in `packages/testkit/scripts/worldmap-smoke.mjs` so the smoke no longer false-fails on `Day 72` vs `Day 73` drift
+- Revalidated the portrait-complete / FX / atlas pass with:
+  - `pnpm art:pixel-portraits`
+  - `pnpm typecheck`
+  - `pnpm --filter @the-oracle/web build`
+  - `pnpm smoke:precinct -- --url http://127.0.0.1:4173 --out-dir output/playwright/precinct-smoke-current`
+  - `pnpm smoke:campaign -- --url http://127.0.0.1:4173 --out-dir output/playwright/campaign-smoke-current`
+  - `pnpm smoke:worldmap -- --url http://127.0.0.1:4173 --out-dir output/playwright/worldmap-smoke-current`
+- Current artifact readout after this pass:
+  - `output/playwright/precinct-smoke-current/precinct-smoke-full.png` shows the tighter sanctuary composition with lighter distant board noise and ambient ritual/water polish
+  - `output/playwright/campaign-smoke-current/consultation-open-full.png` remains clean with portrait-backed envoy and Pythia cards
+  - `output/playwright/campaign-smoke-current/built-full.png` confirms the polished precinct look survives the broader campaign flow
+  - `output/playwright/worldmap-smoke-current/world-map-lab-full.png` confirms the richer atlas shell survives the world flow with zero browser errors
+- Remaining gap after this pass:
+  - the polished vertical slice is stronger and runtime-complete for portraits, but the final finish still needs native source renders for the three fallback-backed portraits plus broader terrain/prop/FX breadth across the full catalog

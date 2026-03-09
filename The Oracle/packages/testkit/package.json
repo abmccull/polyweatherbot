@@ -1,0 +1,22 @@
+{
+  "name": "@the-oracle/testkit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "smoke:campaign": "node ./scripts/campaign-smoke.mjs",
+    "smoke:consultation": "node ./scripts/consultation-smoke.mjs",
+    "smoke:desktop": "node ./scripts/desktop-smoke.mjs",
+    "smoke:logistics": "node ./scripts/logistics-smoke.mjs",
+    "smoke:origins": "node ./scripts/origins-smoke.mjs",
+    "smoke:precinct": "node ./scripts/precinct-smoke.mjs",
+    "smoke:replay-debug": "node ./scripts/replay-debug-smoke.mjs",
+    "smoke:worldmap": "node ./scripts/worldmap-smoke.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  }
+}

@@ -1,0 +1,15 @@
+node_modules
+dist
+coverage
+.DS_Store
+.playwright-cli
+playwright-report
+test-results
+output
+apps/desktop/.vite
+apps/desktop/out
+apps/web/.vite
+apps/web/dist
+.env
+.env.*
+!.env.example

@@ -1,0 +1,943 @@
+{
+  "generated_at": "2026-03-06T17:21:11.002916+00:00",
+  "deliverable": "SHEET-1",
+  "sources": [
+    {
+      "path": "docs/parallel-implementation-plan.md",
+      "purpose": "deliverable scope and milestone asks"
+    },
+    {
+      "path": "packages/content/src/data.ts",
+      "purpose": "building/resource/faction/scenario definitions"
+    },
+    {
+      "path": "packages/core/src/state/initialState.ts",
+      "purpose": "base resources and Pythia/faction baselines"
+    },
+    {
+      "path": "packages/core/src/simulation/updateDay.ts",
+      "purpose": "resource flow, building processing, Pythia day pacing"
+    },
+    {
+      "path": "packages/core/src/simulation/events.ts",
+      "purpose": "consultation cadence, payment logic, trade offers, consequence deltas"
+    }
+  ],
+  "known_gaps": [
+    "Generic building upkeep is not yet applied uniformly in simulation; priest_quarters upkeep is currently data-only.",
+    "Reputation tiers, treasury dedication, crisis chains, and Rising Oracle progression are not implemented in code yet; workbook values are proposed targets.",
+    "Scenario data currently exposes labels/summaries only, so pacing targets are design scaffolding rather than extracted runtime rules."
+  ],
+  "tables": {
+    "buildings": [
+      {
+        "status": "implemented",
+        "building_id": "sacred_way",
+        "name": "Sacred Way",
+        "requires_priest": false,
+        "max_condition": 100,
+        "current_cost_gold": 1,
+        "target_cost_gold": 1,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {},
+        "current_output_per_day": {},
+        "starting_resources": {},
+        "primary_role": "Road / placement unlock",
+        "notes": "Enables placement adjacency; no upkeep or storage."
+      },
+      {
+        "status": "implemented",
+        "building_id": "priest_quarters",
+        "name": "Priest Quarters",
+        "requires_priest": false,
+        "max_condition": 100,
+        "current_cost_gold": 22,
+        "target_cost_gold": 22,
+        "content_upkeep_per_day": {
+          "grain": 6.0
+        },
+        "active_sim_upkeep_per_day": {},
+        "current_output_per_day": {},
+        "starting_resources": {},
+        "primary_role": "Housing / priest anchor",
+        "notes": "Grain upkeep exists in content defs but is not processed in updateDay yet."
+      },
+      {
+        "status": "implemented",
+        "building_id": "storehouse",
+        "name": "Storehouse",
+        "requires_priest": false,
+        "max_condition": 100,
+        "current_cost_gold": 26,
+        "target_cost_gold": 26,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {},
+        "current_output_per_day": {},
+        "starting_resources": {
+          "olive_oil": 4,
+          "grain": 8,
+          "incense": 3
+        },
+        "primary_role": "Precinct buffer / logistics hub",
+        "notes": "Current rebalance targets in sim: olive_oil 6, incense 4, grain 10 per storehouse."
+      },
+      {
+        "status": "implemented",
+        "building_id": "castalian_spring",
+        "name": "Castalian Spring",
+        "requires_priest": true,
+        "max_condition": 100,
+        "current_cost_gold": 18,
+        "target_cost_gold": 18,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {},
+        "current_output_per_day": {
+          "sacred_water": 18.0
+        },
+        "starting_resources": {
+          "sacred_water": 6
+        },
+        "primary_role": "Sacred water source",
+        "notes": "Produces 0.03 sacred water per tick and caps local storage at 20."
+      },
+      {
+        "status": "implemented",
+        "building_id": "inner_sanctum",
+        "name": "Inner Sanctum",
+        "requires_priest": true,
+        "max_condition": 120,
+        "current_cost_gold": 42,
+        "target_cost_gold": 42,
+        "content_upkeep_per_day": {
+          "incense": 6.0,
+          "sacred_water": 6.0
+        },
+        "active_sim_upkeep_per_day": {
+          "incense_idle": 6.0,
+          "sacred_water_idle": 4.8,
+          "incense_open": 21.0,
+          "sacred_water_open": 18.0
+        },
+        "current_output_per_day": {},
+        "starting_resources": {},
+        "primary_role": "Consultation core",
+        "notes": "Specific hardcoded demand overrides generic content upkeep; unstaffed sanctum loses 18 condition/day."
+      },
+      {
+        "status": "implemented",
+        "building_id": "eternal_flame_brazier",
+        "name": "Eternal Flame Brazier",
+        "requires_priest": true,
+        "max_condition": 100,
+        "current_cost_gold": 16,
+        "target_cost_gold": 16,
+        "content_upkeep_per_day": {
+          "olive_oil": 9.0
+        },
+        "active_sim_upkeep_per_day": {
+          "olive_oil": 9.0
+        },
+        "current_output_per_day": {},
+        "starting_resources": {
+          "olive_oil": 4
+        },
+        "primary_role": "Prestige / ritual flame",
+        "notes": "When oil falls to ~0, the brazier degrades by 12 condition/day in addition to priest staffing pressure."
+      },
+      {
+        "status": "proposed",
+        "building_id": "animal_pen",
+        "name": "Animal Pen",
+        "requires_priest": false,
+        "max_condition": 100,
+        "current_cost_gold": null,
+        "target_cost_gold": 20,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {
+          "grain": 2.0
+        },
+        "current_output_per_day": {
+          "sacred_animals": 0.8
+        },
+        "starting_resources": {},
+        "primary_role": "Sacred animal source",
+        "notes": "Target rate sized so one pen can sustain one altar with a small reserve buffer."
+      },
+      {
+        "status": "proposed",
+        "building_id": "sacrificial_altar",
+        "name": "Sacrificial Altar",
+        "requires_priest": true,
+        "max_condition": 110,
+        "current_cost_gold": null,
+        "target_cost_gold": 28,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {
+          "sacred_animals": 0.5,
+          "incense": 0.3
+        },
+        "current_output_per_day": {},
+        "starting_resources": {},
+        "primary_role": "Omen-quality input",
+        "notes": "Consumes animals and incense to support the planned extispicy chain rather than a stockpiled output resource."
+      },
+      {
+        "status": "proposed",
+        "building_id": "granary",
+        "name": "Granary",
+        "requires_priest": false,
+        "max_condition": 100,
+        "current_cost_gold": null,
+        "target_cost_gold": 24,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {},
+        "current_output_per_day": {},
+        "starting_resources": {},
+        "primary_role": "Bulk grain buffer",
+        "notes": "Proposed as a storage unlock with +40 local grain capacity rather than a passive sink."
+      },
+      {
+        "status": "proposed",
+        "building_id": "kitchen",
+        "name": "Kitchen",
+        "requires_priest": false,
+        "max_condition": 100,
+        "current_cost_gold": null,
+        "target_cost_gold": 26,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {
+          "grain": 3.0
+        },
+        "current_output_per_day": {
+          "bread": 2.0
+        },
+        "starting_resources": {},
+        "primary_role": "Food conversion",
+        "notes": "Target conversion keeps bread scarce enough to matter for xenon / market upkeep."
+      },
+      {
+        "status": "proposed",
+        "building_id": "olive_press",
+        "name": "Olive Press",
+        "requires_priest": false,
+        "max_condition": 100,
+        "current_cost_gold": null,
+        "target_cost_gold": 26,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {
+          "olives": 4.0
+        },
+        "current_output_per_day": {
+          "olive_oil": 3.0
+        },
+        "starting_resources": {},
+        "primary_role": "Oil conversion",
+        "notes": "One press comfortably feeds a brazier target burn of ~4 oil/day with room for rituals."
+      },
+      {
+        "status": "proposed",
+        "building_id": "incense_store",
+        "name": "Incense Store",
+        "requires_priest": false,
+        "max_condition": 100,
+        "current_cost_gold": null,
+        "target_cost_gold": 22,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {},
+        "current_output_per_day": {},
+        "starting_resources": {},
+        "primary_role": "Incense buffer",
+        "notes": "Proposed as a storage unlock with +20 local incense capacity and logistics priority for sanctum/altar demand."
+      },
+      {
+        "status": "proposed",
+        "building_id": "agora_market",
+        "name": "Agora Market",
+        "requires_priest": false,
+        "max_condition": 110,
+        "current_cost_gold": null,
+        "target_cost_gold": 34,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {
+          "bread": 1.0,
+          "incense": 0.2
+        },
+        "current_output_per_day": {
+          "gold_equivalent": 2.5
+        },
+        "starting_resources": {},
+        "primary_role": "Visitor income",
+        "notes": "Gold-equivalent output is a balancing target for future donation / market income, not a current stock resource."
+      },
+      {
+        "status": "proposed",
+        "building_id": "xenon",
+        "name": "Xenon",
+        "requires_priest": false,
+        "max_condition": 110,
+        "current_cost_gold": null,
+        "target_cost_gold": 36,
+        "content_upkeep_per_day": {},
+        "active_sim_upkeep_per_day": {
+          "bread": 1.0,
+          "sacred_water": 0.5
+        },
+        "current_output_per_day": {
+          "gold_equivalent": 1.5
+        },
+        "starting_resources": {},
+        "primary_role": "Envoy lodging / donation buffer",
+        "notes": "Intended to soften envoy mood and add steady donation value without eclipsing consultation income."
+      }
+    ],
+    "resource_rates": [
+      {
+        "status": "implemented",
+        "mode": "production",
+        "building_or_system": "castalian_spring",
+        "resource": "sacred_water",
+        "current_delta_per_day": 18.0,
+        "target_delta_per_day": 18.0,
+        "support_or_example": "1 spring supports 3.75 idle sanctums or 1 open sanctum",
+        "simulated_now": "yes",
+        "notes": "0.03 per tick * 600 ticks/day."
+      },
+      {
+        "status": "implemented",
+        "mode": "consumption",
+        "building_or_system": "inner_sanctum (idle)",
+        "resource": "incense",
+        "current_delta_per_day": -6.0,
+        "target_delta_per_day": -4.0,
+        "support_or_example": "12 base incense lasts 2.0 idle days",
+        "simulated_now": "yes",
+        "notes": "Hardcoded idle demand while consultation is not open."
+      },
+      {
+        "status": "implemented",
+        "mode": "consumption",
+        "building_or_system": "inner_sanctum (idle)",
+        "resource": "sacred_water",
+        "current_delta_per_day": -4.8,
+        "target_delta_per_day": -4.0,
+        "support_or_example": "1 spring supports 3.75 idle sanctums",
+        "simulated_now": "yes",
+        "notes": "Water demand is slightly below the content-def upkeep value."
+      },
+      {
+        "status": "implemented",
+        "mode": "consumption",
+        "building_or_system": "inner_sanctum (open)",
+        "resource": "incense",
+        "current_delta_per_day": -21.0,
+        "target_delta_per_day": -12.0,
+        "support_or_example": "12 base incense lasts 0.57 open days if time advances",
+        "simulated_now": "yes*",
+        "notes": "Open-mode demand only matters if simulation ticks while the consultation remains open."
+      },
+      {
+        "status": "implemented",
+        "mode": "consumption",
+        "building_or_system": "inner_sanctum (open)",
+        "resource": "sacred_water",
+        "current_delta_per_day": -18.0,
+        "target_delta_per_day": -10.0,
+        "support_or_example": "1 spring exactly breaks even at the current open rate",
+        "simulated_now": "yes*",
+        "notes": "At target, one spring leaves spare water for purification."
+      },
+      {
+        "status": "implemented",
+        "mode": "consumption",
+        "building_or_system": "eternal_flame_brazier",
+        "resource": "olive_oil",
+        "current_delta_per_day": -9.0,
+        "target_delta_per_day": -4.0,
+        "support_or_example": "18 base oil lasts 2.0 current days",
+        "simulated_now": "yes",
+        "notes": "Lower target burn leaves room for future olive-press output and trade shocks."
+      },
+      {
+        "status": "implemented",
+        "mode": "consumption",
+        "building_or_system": "priest_quarters",
+        "resource": "grain",
+        "current_delta_per_day": -6.0,
+        "target_delta_per_day": -3.0,
+        "support_or_example": "40 base grain lasts 6.7 days if generic upkeep is wired",
+        "simulated_now": "definition only",
+        "notes": "Upkeep is present in content but not currently processed in updateDay."
+      },
+      {
+        "status": "proposed",
+        "mode": "conversion",
+        "building_or_system": "animal_pen",
+        "resource": "sacred_animals",
+        "current_delta_per_day": null,
+        "target_delta_per_day": 0.8,
+        "support_or_example": "Consumes grain at 2/day",
+        "simulated_now": "no",
+        "notes": "Future chain target for altar and omen sourcing."
+      },
+      {
+        "status": "proposed",
+        "mode": "conversion",
+        "building_or_system": "kitchen",
+        "resource": "bread",
+        "current_delta_per_day": null,
+        "target_delta_per_day": 2.0,
+        "support_or_example": "Consumes grain at 3/day",
+        "simulated_now": "no",
+        "notes": "Target keeps xenon/market demand meaningful but sustainable."
+      },
+      {
+        "status": "proposed",
+        "mode": "conversion",
+        "building_or_system": "olive_press",
+        "resource": "olive_oil",
+        "current_delta_per_day": null,
+        "target_delta_per_day": 3.0,
+        "support_or_example": "Consumes olives at 4/day",
+        "simulated_now": "no",
+        "notes": "One press should almost cover a target brazier burn by itself."
+      },
+      {
+        "status": "proposed",
+        "mode": "consumption",
+        "building_or_system": "sacrificial_altar",
+        "resource": "sacred_animals",
+        "current_delta_per_day": null,
+        "target_delta_per_day": -0.5,
+        "support_or_example": "Also consumes incense at 0.3/day",
+        "simulated_now": "no",
+        "notes": "Target sink for extispicy depth; effect is omen quality, not stock output."
+      },
+      {
+        "status": "proposed",
+        "mode": "income",
+        "building_or_system": "agora_market",
+        "resource": "gold_equivalent",
+        "current_delta_per_day": null,
+        "target_delta_per_day": 2.5,
+        "support_or_example": "Consumes bread 1/day and incense 0.2/day",
+        "simulated_now": "no",
+        "notes": "Treat as donation/market income target when future systems land."
+      },
+      {
+        "status": "proposed",
+        "mode": "income",
+        "building_or_system": "xenon",
+        "resource": "gold_equivalent",
+        "current_delta_per_day": null,
+        "target_delta_per_day": 1.5,
+        "support_or_example": "Consumes bread 1/day and sacred_water 0.5/day",
+        "simulated_now": "no",
+        "notes": "Small passive income target to support envoy hosting without replacing consultation revenue."
+      }
+    ],
+    "envoy_summary": {
+      "average_initial_payment": 57.5,
+      "consultations_first_90_days": 6,
+      "gross_consultation_gold_first_90_days": 345.0,
+      "monthly_trade_offers": 4,
+      "consequence_delay_days": 20,
+      "month2_trade_offer_snapshot": [
+        {
+          "faction_id": "miletus",
+          "resource": "sacred_water",
+          "amount": 16,
+          "price": 8.6,
+          "priority_score": 116
+        },
+        {
+          "faction_id": "syracuse",
+          "resource": "grain",
+          "amount": 15,
+          "price": 9.5,
+          "priority_score": 112
+        },
+        {
+          "faction_id": "corinth",
+          "resource": "grain",
+          "amount": 18,
+          "price": 8.6,
+          "priority_score": 110
+        },
+        {
+          "faction_id": "thebes",
+          "resource": "incense",
+          "amount": 20,
+          "price": 9.0,
+          "priority_score": 106
+        }
+      ]
+    },
+    "envoy_factions": [
+      {
+        "id": "athens",
+        "profile": "martial",
+        "agenda": "war",
+        "trade_access": true,
+        "favored_resource": "grain",
+        "credibility": 48,
+        "favour": 52,
+        "debt": 0,
+        "initial_payment_offered": 52,
+        "month2_offer_resource": null,
+        "month2_offer_amount": null,
+        "month2_offer_price": null,
+        "month2_offer_priority_score": 100
+      },
+      {
+        "id": "sparta",
+        "profile": "martial",
+        "agenda": "war",
+        "trade_access": true,
+        "favored_resource": "olive_oil",
+        "credibility": 51,
+        "favour": 51,
+        "debt": 0,
+        "initial_payment_offered": 54,
+        "month2_offer_resource": null,
+        "month2_offer_amount": null,
+        "month2_offer_price": null,
+        "month2_offer_priority_score": 102
+      },
+      {
+        "id": "corinth",
+        "profile": "mercantile",
+        "agenda": "trade",
+        "trade_access": true,
+        "favored_resource": "incense",
+        "credibility": 54,
+        "favour": 50,
+        "debt": 0,
+        "initial_payment_offered": 55,
+        "month2_offer_resource": "grain",
+        "month2_offer_amount": 18,
+        "month2_offer_price": 8.6,
+        "month2_offer_priority_score": 110
+      },
+      {
+        "id": "thebes",
+        "profile": "devout",
+        "agenda": "faith",
+        "trade_access": true,
+        "favored_resource": "incense",
+        "credibility": 57,
+        "favour": 49,
+        "debt": 0,
+        "initial_payment_offered": 57,
+        "month2_offer_resource": "incense",
+        "month2_offer_amount": 20,
+        "month2_offer_price": 9.0,
+        "month2_offer_priority_score": 106
+      },
+      {
+        "id": "argos",
+        "profile": "mercantile",
+        "agenda": "trade",
+        "trade_access": false,
+        "favored_resource": "grain",
+        "credibility": 60,
+        "favour": 48,
+        "debt": 0,
+        "initial_payment_offered": 58,
+        "month2_offer_resource": null,
+        "month2_offer_amount": null,
+        "month2_offer_price": null,
+        "month2_offer_priority_score": 114
+      },
+      {
+        "id": "miletus",
+        "profile": "mercantile",
+        "agenda": "trade",
+        "trade_access": true,
+        "favored_resource": "sacred_water",
+        "credibility": 63,
+        "favour": 47,
+        "debt": 0,
+        "initial_payment_offered": 60,
+        "month2_offer_resource": "sacred_water",
+        "month2_offer_amount": 16,
+        "month2_offer_price": 8.6,
+        "month2_offer_priority_score": 116
+      },
+      {
+        "id": "syracuse",
+        "profile": "martial",
+        "agenda": "war",
+        "trade_access": true,
+        "favored_resource": "grain",
+        "credibility": 66,
+        "favour": 46,
+        "debt": 0,
+        "initial_payment_offered": 61,
+        "month2_offer_resource": "grain",
+        "month2_offer_amount": 15,
+        "month2_offer_price": 9.5,
+        "month2_offer_priority_score": 112
+      },
+      {
+        "id": "macedon",
+        "profile": "scheming",
+        "agenda": "succession",
+        "trade_access": false,
+        "favored_resource": "olive_oil",
+        "credibility": 69,
+        "favour": 45,
+        "debt": 0,
+        "initial_payment_offered": 63,
+        "month2_offer_resource": null,
+        "month2_offer_amount": null,
+        "month2_offer_price": null,
+        "month2_offer_priority_score": 114
+      }
+    ],
+    "credibility_rules": [
+      {
+        "rule": "Strong delivery",
+        "current": "+8 credibility if value >= 60 and risk < 75; faction favour +4 if value > 55",
+        "target": "Keep the best case in the +6 to +8 range so one success matters but does not trivialize faction politics.",
+        "source": "packages/core/src/reducers/index.ts"
+      },
+      {
+        "rule": "Guarded delivery",
+        "current": "+3 credibility otherwise; low-value answers can still lose 2 favour",
+        "target": "Neutral answers should remain in the +2 to +3 band and avoid becoming the dominant gold source by themselves.",
+        "source": "packages/core/src/reducers/index.ts"
+      },
+      {
+        "rule": "Risky miss",
+        "current": "-6 credibility if risk >= 85 on delivery",
+        "target": "Preserve a real downside at -5 to -6; this is the main brake on exact prophecies.",
+        "source": "packages/core/src/reducers/index.ts"
+      },
+      {
+        "rule": "Consequence resolution",
+        "current": "Resolution delta ranges from -18 to +18 with a 20-day delay",
+        "target": "Compress routine outcomes toward -12 to +14 while leaving room for rare outliers.",
+        "source": "packages/core/src/simulation/events.ts"
+      },
+      {
+        "rule": "Observer reactions",
+        "current": "Only the top 3 reacting factions are applied on delivery / resolution",
+        "target": "Keep the cap at 3 to preserve readability as more factions and crises land.",
+        "source": "packages/core/src/simulation/events.ts"
+      }
+    ],
+    "pythia_metrics": [
+      {
+        "metric": "attunement",
+        "current": 68,
+        "target": 68,
+        "unit": "score",
+        "notes": "Starter Pythia baseline in initialState."
+      },
+      {
+        "metric": "mental_clarity",
+        "current": 71,
+        "target": 75,
+        "unit": "score",
+        "notes": "Slightly higher target gives more room before chaining rest actions."
+      },
+      {
+        "metric": "rest_need_start",
+        "current": 22,
+        "target": 22,
+        "unit": "need",
+        "notes": "Initial state baseline."
+      },
+      {
+        "metric": "purification_need_start",
+        "current": 36,
+        "target": 36,
+        "unit": "need",
+        "notes": "Initial state baseline."
+      },
+      {
+        "metric": "idle_rest_gain_per_day",
+        "current": 9.0,
+        "target": 4.5,
+        "unit": "need/day",
+        "notes": "Current value reaches the warning band too quickly between 15-day consultations."
+      },
+      {
+        "metric": "open_rest_gain_per_day",
+        "current": 48.0,
+        "target": 18.0,
+        "unit": "need/day",
+        "notes": "Only applies if the game keeps ticking while a consultation is open."
+      },
+      {
+        "metric": "purification_gain_per_day",
+        "current": 12.0,
+        "target": 6.0,
+        "unit": "need/day",
+        "notes": "Current pacing hits the 68 warning band in under 3 idle days."
+      },
+      {
+        "metric": "delivery_rest_delta",
+        "current": 18,
+        "target": 12,
+        "unit": "need",
+        "notes": "Delivery currently spikes rest need immediately."
+      },
+      {
+        "metric": "delivery_purification_delta",
+        "current": -18,
+        "target": -18,
+        "unit": "need",
+        "notes": "Current delivery does at least clear some purification pressure."
+      },
+      {
+        "metric": "rest_command_relief",
+        "current": -24,
+        "target": -30,
+        "unit": "need",
+        "notes": "Target relief makes a rest action worth roughly a week of idle gain."
+      },
+      {
+        "metric": "purify_command_relief",
+        "current": -28,
+        "target": -36,
+        "unit": "need",
+        "notes": "Pairs better with 2 water / 1 incense if generic logistics expands."
+      },
+      {
+        "metric": "purify_water_cost",
+        "current": 2,
+        "target": 2,
+        "unit": "sacred_water",
+        "notes": "No change recommended."
+      },
+      {
+        "metric": "purify_incense_cost",
+        "current": 1,
+        "target": 1,
+        "unit": "incense",
+        "notes": "No change recommended."
+      },
+      {
+        "metric": "rest_warn_threshold",
+        "current": 70,
+        "target": 70,
+        "unit": "need",
+        "notes": "Advisor message threshold."
+      },
+      {
+        "metric": "purification_warn_threshold",
+        "current": 68,
+        "target": 68,
+        "unit": "need",
+        "notes": "Advisor message threshold."
+      },
+      {
+        "metric": "days_to_rest_warn_from_start",
+        "current": 5.3,
+        "target": 10.7,
+        "unit": "days",
+        "notes": "Assumes idle pacing."
+      },
+      {
+        "metric": "days_to_purification_warn_from_start",
+        "current": 2.7,
+        "target": 5.3,
+        "unit": "days",
+        "notes": "Assumes idle pacing."
+      },
+      {
+        "metric": "consultation_cadence",
+        "current": 15,
+        "target": 15,
+        "unit": "days",
+        "notes": "Consultations appear every 15 days starting on day 15 when idle."
+      },
+      {
+        "metric": "consequence_delay",
+        "current": 20,
+        "target": 20,
+        "unit": "days",
+        "notes": "Prophecy consequences currently resolve 20 days later."
+      }
+    ],
+    "reputation_tiers": [
+      {
+        "tier": "Foundation",
+        "renown_threshold": 0,
+        "avg_cred_floor": 0,
+        "consultations_delivered": 0,
+        "distinct_factions": 0,
+        "buildings_online": 0,
+        "unlocks": "Current vertical slice / starter tools",
+        "target_day": 1,
+        "implemented_now": "n/a"
+      },
+      {
+        "tier": "Regional Notice",
+        "renown_threshold": 20,
+        "avg_cred_floor": 55,
+        "consultations_delivered": 1,
+        "distinct_factions": 1,
+        "buildings_online": 3,
+        "unlocks": "Granary, Kitchen, first tier banner / tutorial off-ramp",
+        "target_day": 20,
+        "implemented_now": "no"
+      },
+      {
+        "tier": "Hellenic Whisper",
+        "renown_threshold": 55,
+        "avg_cred_floor": 60,
+        "consultations_delivered": 3,
+        "distinct_factions": 3,
+        "buildings_online": 6,
+        "unlocks": "Animal Pen, Sacrificial Altar, Olive Press",
+        "target_day": 45,
+        "implemented_now": "no"
+      },
+      {
+        "tier": "Sacred Authority",
+        "renown_threshold": 85,
+        "avg_cred_floor": 62,
+        "consultations_delivered": 4,
+        "distinct_factions": 5,
+        "buildings_online": 8,
+        "unlocks": "First crisis chain, Agora Market, Xenon",
+        "target_day": 75,
+        "implemented_now": "no"
+      },
+      {
+        "tier": "Panhellenic Seat",
+        "renown_threshold": 110,
+        "avg_cred_floor": 65,
+        "consultations_delivered": 6,
+        "distinct_factions": 6,
+        "buildings_online": 10,
+        "unlocks": "Phase-1 Rising Oracle completion gate / world-map escalation",
+        "target_day": 90,
+        "implemented_now": "no"
+      }
+    ],
+    "milestones": [
+      {
+        "milestone": "First tier unlock",
+        "gate": "renown >= 20, avg credibility >= 55, 3 buildings online",
+        "target_day": 20,
+        "implemented_now": "no"
+      },
+      {
+        "milestone": "First treasury dedication",
+        "gate": "renown >= 45, liquid gold >= 180, precinct health >= 90",
+        "target_day": 60,
+        "implemented_now": "no"
+      },
+      {
+        "milestone": "First crisis chain",
+        "gate": "renown >= 85, 5 factions consulted, avg credibility >= 62",
+        "target_day": 75,
+        "implemented_now": "no"
+      }
+    ],
+    "rising_oracle_pacing": [
+      {
+        "day": 1,
+        "phase": "Foundation",
+        "cumulative_consultations": 0,
+        "expected_liquid_gold": 120,
+        "planned_spend_to_date": 0,
+        "buildings_online": 0,
+        "avg_credibility": 58.5,
+        "checkpoint": "Open with base reserves and no precinct footprint yet.",
+        "notes": "Gross gold excludes any future donation systems."
+      },
+      {
+        "day": 15,
+        "phase": "First consultation delivered",
+        "cumulative_consultations": 1,
+        "expected_liquid_gold": 112,
+        "planned_spend_to_date": 66,
+        "buildings_online": 3,
+        "avg_credibility": 60,
+        "checkpoint": "Sacred Way + Priest Quarters + Storehouse + Spring should be online before the first envoy.",
+        "notes": "120 start + ~58 consultation payment - 66 spend."
+      },
+      {
+        "day": 20,
+        "phase": "First tier unlock",
+        "cumulative_consultations": 1,
+        "expected_liquid_gold": 96,
+        "planned_spend_to_date": 82,
+        "buildings_online": 4,
+        "avg_credibility": 60,
+        "checkpoint": "Regional Notice tier should unlock here if the first reading is not a disaster.",
+        "notes": "Adds the brazier while keeping a workable reserve."
+      },
+      {
+        "day": 30,
+        "phase": "First monthly trade window",
+        "cumulative_consultations": 2,
+        "expected_liquid_gold": 150,
+        "planned_spend_to_date": 85,
+        "buildings_online": 4,
+        "avg_credibility": 61,
+        "checkpoint": "First caravan offers and the second consultation should overlap.",
+        "notes": "Month-turn trade offers are the first external economy beat."
+      },
+      {
+        "day": 35,
+        "phase": "First prophecy resolution",
+        "cumulative_consultations": 2,
+        "expected_liquid_gold": 150,
+        "planned_spend_to_date": 85,
+        "buildings_online": 4,
+        "avg_credibility": 61,
+        "checkpoint": "The first 20-day consequence resolves five days after the second consultation opens.",
+        "notes": "This is where the campaign should start feeling reactive."
+      },
+      {
+        "day": 45,
+        "phase": "Second expansion beat",
+        "cumulative_consultations": 3,
+        "expected_liquid_gold": 169,
+        "planned_spend_to_date": 124,
+        "buildings_online": 5,
+        "avg_credibility": 62,
+        "checkpoint": "Inner Sanctum online, purification loop stabilized, third consultation delivered.",
+        "notes": "Gross gold 120 + 3 * 57.5 = 292.5 before spend."
+      },
+      {
+        "day": 60,
+        "phase": "First treasury dedication",
+        "cumulative_consultations": 4,
+        "expected_liquid_gold": 190,
+        "planned_spend_to_date": 160,
+        "buildings_online": 6,
+        "avg_credibility": 63,
+        "checkpoint": "Treasury dedication should be affordable without stalling the precinct build-out.",
+        "notes": "Reserve target stays conservative because market/donation income is not modeled."
+      },
+      {
+        "day": 75,
+        "phase": "First crisis chain",
+        "cumulative_consultations": 5,
+        "expected_liquid_gold": 208,
+        "planned_spend_to_date": 200,
+        "buildings_online": 8,
+        "avg_credibility": 64,
+        "checkpoint": "World-map pressure and first crisis chain should arrive once multiple factions have history with Delphi.",
+        "notes": "Uses the proposed Sacred Authority tier as the trigger band."
+      },
+      {
+        "day": 90,
+        "phase": "Phase-1 complete",
+        "cumulative_consultations": 6,
+        "expected_liquid_gold": 245,
+        "planned_spend_to_date": 220,
+        "buildings_online": 10,
+        "avg_credibility": 65,
+        "checkpoint": "By day 90 the precinct should support 2 real supply chains and a stable consultation loop.",
+        "notes": "Gross gold target is ~465 before planned spend."
+      }
+    ]
+  }
+}

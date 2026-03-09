@@ -1,0 +1,289 @@
+export type TerrainArtAsset = {
+  terrainId: string;
+  terrainAssetId: string;
+  variantId: string;
+  sourceAssetId: string;
+  publicPath: string;
+  outputPath: string;
+  publicOutputPath: string;
+  sourceRenderPath: string;
+  width: number;
+  height: number;
+  trimWidth: number;
+  trimHeight: number;
+  trimOffsetX: number;
+  trimBottomInset: number;
+};
+
+const terrainArtEntries: TerrainArtAsset[] = [
+  {
+    "terrainId": "dry_earth",
+    "terrainAssetId": "dry_earth:v1",
+    "variantId": "v1",
+    "sourceAssetId": "dry_earth_tiles",
+    "publicPath": "/assets/precinct/terrain/dry_earth-v1.png",
+    "outputPath": "output/art/pixel/terrain/dry_earth-v1.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/dry_earth-v1.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/009-dry_earth_tiles.png",
+    "width": 288,
+    "height": 228,
+    "trimWidth": 288,
+    "trimHeight": 164,
+    "trimOffsetX": 0,
+    "trimBottomInset": 0
+  },
+  {
+    "terrainId": "dry_earth",
+    "terrainAssetId": "dry_earth:v2",
+    "variantId": "v2",
+    "sourceAssetId": "dry_earth_tiles",
+    "publicPath": "/assets/precinct/terrain/dry_earth-v2.png",
+    "outputPath": "output/art/pixel/terrain/dry_earth-v2.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/dry_earth-v2.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/009-dry_earth_tiles.png",
+    "width": 288,
+    "height": 228,
+    "trimWidth": 288,
+    "trimHeight": 86,
+    "trimOffsetX": 0,
+    "trimBottomInset": 52
+  },
+  {
+    "terrainId": "dry_earth",
+    "terrainAssetId": "dry_earth:v3",
+    "variantId": "v3",
+    "sourceAssetId": "dry_earth_tiles",
+    "publicPath": "/assets/precinct/terrain/dry_earth-v3.png",
+    "outputPath": "output/art/pixel/terrain/dry_earth-v3.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/dry_earth-v3.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/009-dry_earth_tiles.png",
+    "width": 288,
+    "height": 228,
+    "trimWidth": 288,
+    "trimHeight": 154,
+    "trimOffsetX": 0,
+    "trimBottomInset": 0
+  },
+  {
+    "terrainId": "dry_earth",
+    "terrainAssetId": "dry_earth:v4",
+    "variantId": "v4",
+    "sourceAssetId": "dry_earth_tiles",
+    "publicPath": "/assets/precinct/terrain/dry_earth-v4.png",
+    "outputPath": "output/art/pixel/terrain/dry_earth-v4.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/dry_earth-v4.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/009-dry_earth_tiles.png",
+    "width": 288,
+    "height": 228,
+    "trimWidth": 288,
+    "trimHeight": 221,
+    "trimOffsetX": 0,
+    "trimBottomInset": 7
+  },
+  {
+    "terrainId": "limestone_terrace",
+    "terrainAssetId": "limestone_terrace:v1",
+    "variantId": "v1",
+    "sourceAssetId": "limestone_terrace_tiles",
+    "publicPath": "/assets/precinct/terrain/limestone_terrace-v1.png",
+    "outputPath": "output/art/pixel/terrain/limestone_terrace-v1.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/limestone_terrace-v1.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/008-limestone_terrace_tiles.png",
+    "width": 372,
+    "height": 266,
+    "trimWidth": 372,
+    "trimHeight": 187,
+    "trimOffsetX": 0,
+    "trimBottomInset": 12
+  },
+  {
+    "terrainId": "limestone_terrace",
+    "terrainAssetId": "limestone_terrace:v2",
+    "variantId": "v2",
+    "sourceAssetId": "limestone_terrace_tiles",
+    "publicPath": "/assets/precinct/terrain/limestone_terrace-v2.png",
+    "outputPath": "output/art/pixel/terrain/limestone_terrace-v2.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/limestone_terrace-v2.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/008-limestone_terrace_tiles.png",
+    "width": 372,
+    "height": 266,
+    "trimWidth": 372,
+    "trimHeight": 180,
+    "trimOffsetX": 0,
+    "trimBottomInset": 15
+  },
+  {
+    "terrainId": "limestone_terrace",
+    "terrainAssetId": "limestone_terrace:v3",
+    "variantId": "v3",
+    "sourceAssetId": "limestone_terrace_tiles",
+    "publicPath": "/assets/precinct/terrain/limestone_terrace-v3.png",
+    "outputPath": "output/art/pixel/terrain/limestone_terrace-v3.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/limestone_terrace-v3.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/008-limestone_terrace_tiles.png",
+    "width": 372,
+    "height": 266,
+    "trimWidth": 372,
+    "trimHeight": 254,
+    "trimOffsetX": 0,
+    "trimBottomInset": 0
+  },
+  {
+    "terrainId": "limestone_terrace",
+    "terrainAssetId": "limestone_terrace:v4",
+    "variantId": "v4",
+    "sourceAssetId": "limestone_terrace_tiles",
+    "publicPath": "/assets/precinct/terrain/limestone_terrace-v4.png",
+    "outputPath": "output/art/pixel/terrain/limestone_terrace-v4.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/limestone_terrace-v4.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/008-limestone_terrace_tiles.png",
+    "width": 372,
+    "height": 266,
+    "trimWidth": 372,
+    "trimHeight": 266,
+    "trimOffsetX": 0,
+    "trimBottomInset": 0
+  },
+  {
+    "terrainId": "sacred_paving",
+    "terrainAssetId": "sacred_paving:v1",
+    "variantId": "v1",
+    "sourceAssetId": "sacred_paving_tiles",
+    "publicPath": "/assets/precinct/terrain/sacred_paving-v1.png",
+    "outputPath": "output/art/pixel/terrain/sacred_paving-v1.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/sacred_paving-v1.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/010-sacred_paving_tiles.png",
+    "width": 370,
+    "height": 280,
+    "trimWidth": 370,
+    "trimHeight": 280,
+    "trimOffsetX": 0,
+    "trimBottomInset": 0
+  },
+  {
+    "terrainId": "sacred_paving",
+    "terrainAssetId": "sacred_paving:v2",
+    "variantId": "v2",
+    "sourceAssetId": "sacred_paving_tiles",
+    "publicPath": "/assets/precinct/terrain/sacred_paving-v2.png",
+    "outputPath": "output/art/pixel/terrain/sacred_paving-v2.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/sacred_paving-v2.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/010-sacred_paving_tiles.png",
+    "width": 370,
+    "height": 280,
+    "trimWidth": 370,
+    "trimHeight": 280,
+    "trimOffsetX": 0,
+    "trimBottomInset": 0
+  },
+  {
+    "terrainId": "sacred_paving",
+    "terrainAssetId": "sacred_paving:v3",
+    "variantId": "v3",
+    "sourceAssetId": "sacred_paving_tiles",
+    "publicPath": "/assets/precinct/terrain/sacred_paving-v3.png",
+    "outputPath": "output/art/pixel/terrain/sacred_paving-v3.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/sacred_paving-v3.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/010-sacred_paving_tiles.png",
+    "width": 370,
+    "height": 280,
+    "trimWidth": 370,
+    "trimHeight": 280,
+    "trimOffsetX": 0,
+    "trimBottomInset": 0
+  },
+  {
+    "terrainId": "cliff_edge",
+    "terrainAssetId": "cliff_edge:v1",
+    "variantId": "v1",
+    "sourceAssetId": "cliff_edge_set",
+    "publicPath": "/assets/precinct/terrain/cliff_edge.png",
+    "outputPath": "output/art/pixel/terrain/cliff_edge.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/cliff_edge.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/011-cliff_edge_set.png",
+    "width": 282,
+    "height": 154,
+    "trimWidth": 267,
+    "trimHeight": 100,
+    "trimOffsetX": -7.5,
+    "trimBottomInset": 54
+  },
+  {
+    "terrainId": "retaining_wall",
+    "terrainAssetId": "retaining_wall:v1",
+    "variantId": "v1",
+    "sourceAssetId": "retaining_wall_set",
+    "publicPath": "/assets/precinct/terrain/retaining_wall.png",
+    "outputPath": "output/art/pixel/terrain/retaining_wall.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/retaining_wall.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/013-retaining_wall_set.png",
+    "width": 260,
+    "height": 122,
+    "trimWidth": 260,
+    "trimHeight": 122,
+    "trimOffsetX": 0,
+    "trimBottomInset": 0
+  },
+  {
+    "terrainId": "stone_stairs",
+    "terrainAssetId": "stone_stairs:v1",
+    "variantId": "v1",
+    "sourceAssetId": "stone_stair_set",
+    "publicPath": "/assets/precinct/terrain/stone_stairs.png",
+    "outputPath": "output/art/pixel/terrain/stone_stairs.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/stone_stairs.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/012-stone_stair_set.png",
+    "width": 700,
+    "height": 246,
+    "trimWidth": 700,
+    "trimHeight": 246,
+    "trimOffsetX": 0,
+    "trimBottomInset": 0
+  },
+  {
+    "terrainId": "spring_pool",
+    "terrainAssetId": "spring_pool:v1",
+    "variantId": "v1",
+    "sourceAssetId": "spring_pool_tiles",
+    "publicPath": "/assets/precinct/terrain/spring_pool.png",
+    "outputPath": "output/art/pixel/terrain/spring_pool.png",
+    "publicOutputPath": "apps/web/public/assets/precinct/terrain/spring_pool.png",
+    "sourceRenderPath": "output/art/imagegen/core_slice_tuned/014-spring_pool_tiles.png",
+    "width": 246,
+    "height": 188,
+    "trimWidth": 244,
+    "trimHeight": 125,
+    "trimOffsetX": 1,
+    "trimBottomInset": 21
+  }
+];
+
+export const terrainArtVariantsByTerrainId: Record<string, TerrainArtAsset[]> = terrainArtEntries.reduce((acc, entry) => {
+  const existing = acc[entry.terrainId];
+  if (existing) {
+    existing.push(entry);
+  } else {
+    acc[entry.terrainId] = [entry];
+  }
+  return acc;
+}, {} as Record<string, TerrainArtAsset[]>);
+
+export const terrainArtByAssetId: Record<string, TerrainArtAsset> = Object.fromEntries(
+  terrainArtEntries.map((entry) => [entry.terrainAssetId, entry])
+);
+
+export function getTerrainArt(terrainId: string): TerrainArtAsset | null {
+  return terrainArtVariantsByTerrainId[terrainId]?.[0] ?? null;
+}
+
+export function getTerrainArtVariants(terrainId: string): TerrainArtAsset[] {
+  return terrainArtVariantsByTerrainId[terrainId] ?? [];
+}
+
+export function getTerrainArtVariant(terrainId: string, variantId: string): TerrainArtAsset | null {
+  return terrainArtVariantsByTerrainId[terrainId]?.find((entry) => entry.variantId === variantId) ?? null;
+}
+
+export function listTerrainArtAssets(): TerrainArtAsset[] {
+  return terrainArtEntries;
+}
