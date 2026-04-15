@@ -6,11 +6,12 @@ import argparse
 import asyncio
 import signal
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config import Config
+from copycat.engine import CopycatEngine
 from db.engine import init_db, cleanup_old_data
-from observability import write_metrics_snapshot
+from observability import write_metrics_snapshot, write_copy_metrics_snapshot
 from learning.calibrator import ConfidenceCalibrator
 from learning.optimizer import ParameterOptimizer, restore_tunable_params
 from learning.self_learner import SelfLearner
@@ -21,12 +22,14 @@ from markets.registry import MarketRegistry
 from settlement.noaa import NOAAClient
 from settlement.open_meteo import OpenMeteoClient
 from signals.detector import SignalDetector
+from signals.watchdog import SignalWatchdog
 from trading.executor import TradeExecutor
 from trading.portfolio import Portfolio
 from trading.position_manager import PositionManager
 from trading.reconciliation import ExecutionReconciler
 from trading.redeemer import PositionRedeemer
 from utils.logging import setup_logging, get_logger
+from utils.redemption_schedule import is_within_quiet_hours, next_redemption_run_utc
 from weather.metar_feed import MetarFeed
 from weather.nws_feed import NWSFeed
 from weather.synoptic_feed import SynopticFeed
@@ -50,7 +53,11 @@ class StationSniper:
         self.noaa_client = NOAAClient()
         self.open_meteo = OpenMeteoClient()
         self.portfolio = Portfolio(config)
-        self.tracker = TradeTracker(noaa_client=self.noaa_client, open_meteo=self.open_meteo)
+        self.tracker = TradeTracker(
+            noaa_client=self.noaa_client,
+            open_meteo=self.open_meteo,
+            funder_wallet=config.poly_funder_address,
+        )
         self.executor = TradeExecutor(config, self.portfolio, tracker=self.tracker)
         self.calibrator = ConfidenceCalibrator(self.tracker)
         self.self_learner = SelfLearner(config) if config.self_learning_enabled else None
@@ -58,11 +65,13 @@ class StationSniper:
                                        tracker=self.tracker,
                                        calibrator=self.calibrator,
                                        self_learner=self.self_learner)
+        self.signal_watchdog = SignalWatchdog(config)
         self.position_manager = PositionManager(self.executor, config)
         self.redeemer = PositionRedeemer(config)
         self.optimizer = ParameterOptimizer(config, self.tracker)
         self.market_feed = ClobMarketFeed(config)
         self.reconciler = ExecutionReconciler(config)
+        self.copy_engine = CopycatEngine(config, self.executor, self.redeemer)
 
     async def start(self) -> None:
         """Start all loops."""
@@ -70,10 +79,38 @@ class StationSniper:
             "starting",
             dry_run=self.config.dry_run,
             initial_bankroll=self.config.initial_bankroll,
+            strategy_mode=self.config.strategy_mode,
         )
 
         # Init DB
         init_db(self.config)
+
+        # Init CLOB client
+        self.executor.init_client()
+
+        # Copycat mode: skip weather loops and run wallet-copy workflow.
+        if self.config.strategy_mode == "copycat":
+            if self.self_learner is not None:
+                if self.self_learner.restore():
+                    log.info("self_learning_restored", **self.self_learner.get_diagnostics())
+                self_learning_bootstrap = self.self_learner.retrain()
+                log.info("self_learning_bootstrap", **self_learning_bootstrap)
+            await self.copy_engine.startup()
+            await self.reconciler.start()
+            self._running = True
+            try:
+                await asyncio.gather(
+                    self._copy_poll_loop(),
+                    self._copy_leader_refresh_loop(),
+                    self._redemption_loop(),
+                    self._copy_learning_loop(),
+                    self._copy_heartbeat_loop(),
+                )
+            except asyncio.CancelledError:
+                log.info("copy_loops_cancelled")
+            finally:
+                await self._shutdown()
+            return
 
         # Restore persisted state from DB
         self.portfolio.restore_state()
@@ -90,9 +127,6 @@ class StationSniper:
                 log.info("self_learning_restored", **self.self_learner.get_diagnostics())
             self_learning_bootstrap = self.self_learner.retrain()
             log.info("self_learning_bootstrap", **self_learning_bootstrap)
-
-        # Init CLOB client
-        self.executor.init_client()
 
         # Initial market scan (temperature only)
         await self.registry.refresh()
@@ -226,11 +260,42 @@ class StationSniper:
         self.market_feed.set_tokens(token_ids)
 
     async def _redemption_loop(self) -> None:
-        """Check for and redeem winning positions every 5 minutes."""
+        """Check for and redeem winning positions on configured cadence."""
         while self._running:
             try:
-                await asyncio.sleep(self.config.redemption_interval)
+                now = datetime.now(timezone.utc)
+                next_run = next_redemption_run_utc(
+                    now,
+                    interval_seconds=self.config.redemption_interval,
+                    quiet_hours_enabled=self.config.redemption_quiet_hours_enabled,
+                    timezone_name=self.config.redemption_quiet_timezone,
+                    quiet_start_hour=self.config.redemption_quiet_start_hour,
+                    quiet_end_hour=self.config.redemption_quiet_end_hour,
+                )
+                sleep_seconds = max(1.0, (next_run - now).total_seconds())
+                await asyncio.sleep(sleep_seconds)
+
+                now = datetime.now(timezone.utc)
+                if self.config.redemption_quiet_hours_enabled and is_within_quiet_hours(
+                    now,
+                    timezone_name=self.config.redemption_quiet_timezone,
+                    quiet_start_hour=self.config.redemption_quiet_start_hour,
+                    quiet_end_hour=self.config.redemption_quiet_end_hour,
+                ):
+                    log.info(
+                        "redemption_cycle_skipped_quiet_hours",
+                        timezone=self.config.redemption_quiet_timezone,
+                        quiet_start_hour=self.config.redemption_quiet_start_hour,
+                        quiet_end_hour=self.config.redemption_quiet_end_hour,
+                    )
+                    continue
+
                 result = await self.redeemer.check_and_redeem()
+                if self.config.strategy_mode == "copycat":
+                    self.copy_engine.record_redemption_cycle(result)
+                    closed = await self.copy_engine.sync_locks_with_positions()
+                    if closed:
+                        log.info("copy_locks_closed_after_redemption", closed=closed)
                 if result.redeemed or result.failed:
                     log.info(
                         "redemption_cycle",
@@ -243,6 +308,118 @@ class StationSniper:
                 return
             except Exception as e:
                 log.error("redemption_loop_error", error=str(e))
+                await asyncio.sleep(60)
+
+    async def _copy_poll_loop(self) -> None:
+        """Poll copy-trade leaders and place copy intents."""
+        while self._running:
+            try:
+                await self.copy_engine.poll_once()
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                log.error("copy_poll_loop_error", error=str(e))
+                await asyncio.sleep(2)
+            await asyncio.sleep(1)
+
+    async def _copy_leader_refresh_loop(self) -> None:
+        """Refresh leader eligibility snapshots on configured cadence."""
+        interval = max(1800, int(self.config.leader_refresh_hours * 3600))
+        while self._running:
+            try:
+                await asyncio.sleep(interval)
+                await self.copy_engine.refresh_leaders(force=False)
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                log.error("copy_leader_refresh_loop_error", error=str(e))
+                await asyncio.sleep(60)
+
+    async def _copy_heartbeat_loop(self) -> None:
+        """Emit copycat-mode health telemetry and metrics snapshots."""
+        while self._running:
+            try:
+                await asyncio.sleep(self.config.heartbeat_interval)
+                copy_metrics = self.copy_engine.get_metrics()
+                balance_summary = await self.redeemer.get_position_balance_summary()
+                copy_stats_all = self.tracker.get_stats(market_type="copycat")
+                copy_stats_30d = self.tracker.get_stats(lookback_days=30, market_type="copycat")
+                self_learning_diag = (
+                    self.self_learner.get_diagnostics() if self.self_learner is not None else None
+                )
+
+                log.info(
+                    "copy_heartbeat",
+                    active_leaders=copy_metrics.get("active_leaders"),
+                    open_match_locks=copy_metrics.get("open_match_locks"),
+                    signals_seen=copy_metrics.get("signals_seen"),
+                    signals_accepted=copy_metrics.get("signals_accepted"),
+                    signals_skipped=copy_metrics.get("signals_skipped"),
+                    orders_placed=copy_metrics.get("orders_placed"),
+                    tradable_usdc=round(balance_summary.get("tradable_usdc") or 0.0, 2),
+                    redeemable_positions=balance_summary.get("redeemable_positions"),
+                    redeemable_value=round(balance_summary.get("redeemable_value") or 0.0, 2),
+                    stuck_redeemable_positions=balance_summary.get("stuck_redeemable_positions"),
+                    open_positions=balance_summary.get("open_positions"),
+                    resolved_copycat=copy_stats_all.resolved_trades,
+                    win_rate_copycat=round(copy_stats_all.win_rate, 4),
+                    pnl_copycat=round(copy_stats_all.total_pnl, 2),
+                )
+
+                write_copy_metrics_snapshot(
+                    self.config,
+                    {
+                        "copycat": copy_metrics,
+                        "balances": balance_summary,
+                        "performance": {
+                            "all_time": {
+                                "resolved": copy_stats_all.resolved_trades,
+                                "wins": copy_stats_all.wins,
+                                "losses": copy_stats_all.losses,
+                                "win_rate": round(copy_stats_all.win_rate, 4),
+                                "net_pnl": round(copy_stats_all.total_pnl, 2),
+                                "avg_roi": round(copy_stats_all.avg_roi, 4),
+                            },
+                            "d30": {
+                                "resolved": copy_stats_30d.resolved_trades,
+                                "wins": copy_stats_30d.wins,
+                                "losses": copy_stats_30d.losses,
+                                "win_rate": round(copy_stats_30d.win_rate, 4),
+                                "net_pnl": round(copy_stats_30d.total_pnl, 2),
+                                "avg_roi": round(copy_stats_30d.avg_roi, 4),
+                            },
+                        },
+                        "self_learning": self_learning_diag,
+                    },
+                )
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                log.warning("copy_heartbeat_failed", error=str(e))
+
+    async def _copy_learning_loop(self) -> None:
+        """Resolve copycat trades and retrain learning model periodically."""
+        while self._running:
+            try:
+                await asyncio.sleep(self.config.learning_interval)
+                resolved = await self.tracker.resolve_trades()
+
+                if self.self_learner is not None:
+                    learning_diag = self.self_learner.retrain()
+                    log.info("self_learning_cycle", **learning_diag)
+
+                stats = self.tracker.get_stats(lookback_days=30, market_type="copycat")
+                log.info(
+                    "copy_learning_cycle",
+                    resolved=resolved,
+                    resolved_30d=stats.resolved_trades,
+                    win_rate_30d=round(stats.win_rate, 4),
+                    pnl_30d=round(stats.total_pnl, 2),
+                )
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                log.error("copy_learning_loop_error", error=str(e))
                 await asyncio.sleep(60)
 
     async def _learning_loop(self) -> None:
@@ -320,6 +497,21 @@ class StationSniper:
                     bet_pct=self.config.bet_pct.value,
                 )
 
+                if self.config.signal_kpi_enabled:
+                    funnel = self.tracker.get_signal_funnel_stats(
+                        window_hours=self.config.signal_kpi_window_hours
+                    )
+                    wd = self.signal_watchdog.evaluate_and_apply(funnel)
+                    if wd.triggered:
+                        log.warning(
+                            "signal_watchdog_triggered",
+                            candidates=wd.candidates,
+                            emitted=wd.emitted,
+                            time_gate_ratio=round(wd.time_gate_ratio, 4),
+                            exact_ratio=round(wd.exact_ratio, 4),
+                            actions=wd.actions,
+                        )
+
                 # Write metrics snapshot for external observability
                 write_metrics_snapshot(
                     self.config,
@@ -349,6 +541,7 @@ class StationSniper:
         await self.synoptic_feed.close()
         await self.nws_feed.close()
         await self.discovery.close()
+        await self.copy_engine.close()
 
         log.info("shutdown_complete")
 
@@ -361,6 +554,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Station Sniper: Polymarket Weather Latency Arbitrage Bot")
     parser.add_argument("--dry-run", action="store_true", default=None,
                         help="Run in dry-run mode (log signals without placing orders)")
+    parser.add_argument("--strategy-mode", choices=["weather", "copycat"], default=None,
+                        help="Select strategy runtime mode")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
 
@@ -369,6 +564,8 @@ def main() -> None:
     config = Config.from_env()
     if args.dry_run is not None:
         config.dry_run = args.dry_run
+    if args.strategy_mode is not None:
+        config.strategy_mode = args.strategy_mode
 
     bot = StationSniper(config)
 

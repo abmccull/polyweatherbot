@@ -3,21 +3,44 @@
 from __future__ import annotations
 
 import calendar
+import json
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
+from typing import Any
 
+import httpx
 from sqlalchemy import func, or_
+from sqlalchemy.orm import object_session
 
 from db.engine import get_session
 from db.models import Trade, DailyPnL, SignalCandidate
-from settlement.noaa import NOAAClient
-from settlement.open_meteo import OpenMeteoClient
 from utils.logging import get_logger
-from weather.station_map import lookup_city, lookup_ghcnd
-from weather.temperature import temp_hits_bucket, PreciseTemp, Precision
+
+try:
+    from settlement.noaa import NOAAClient
+except Exception:  # pragma: no cover - copycat-only deployments may omit weather modules
+    NOAAClient = Any  # type: ignore[assignment]
+
+try:
+    from settlement.open_meteo import OpenMeteoClient
+except Exception:  # pragma: no cover - copycat-only deployments may omit weather modules
+    OpenMeteoClient = Any  # type: ignore[assignment]
+
+try:
+    from weather.station_map import lookup_city, lookup_ghcnd
+    from weather.temperature import temp_hits_bucket, PreciseTemp, Precision
+except Exception:  # pragma: no cover - copycat-only deployments may omit weather modules
+    lookup_city = None  # type: ignore[assignment]
+    lookup_ghcnd = None  # type: ignore[assignment]
+    temp_hits_bucket = None  # type: ignore[assignment]
+    PreciseTemp = None  # type: ignore[assignment]
+    Precision = None  # type: ignore[assignment]
 
 log = get_logger("tracker")
 NON_EXECUTED_STATUSES = ("FAILED", "CANCELED", "REJECTED")
+GAMMA_API = "https://gamma-api.polymarket.com"
+DATA_API = "https://data-api.polymarket.com"
+COPYCAT_FILLED_STATUSES = ("FILLED", "MATCHED", "LIVE", "DRY_RUN")
 
 
 def _is_executed_order() -> object:
@@ -69,9 +92,12 @@ class TradeTracker:
         self,
         noaa_client: NOAAClient | None = None,
         open_meteo: OpenMeteoClient | None = None,
+        funder_wallet: str | None = None,
     ) -> None:
         self._noaa = noaa_client
         self._open_meteo = open_meteo
+        self._funder_wallet = (funder_wallet or "").strip().lower()
+        self._copycat_market_cache: dict[str, tuple[datetime, dict]] = {}
 
     async def resolve_trades(self) -> int:
         """Check for unresolved trades and attempt to resolve them.
@@ -82,20 +108,34 @@ class TradeTracker:
         resolved_count = 0
 
         try:
+            backfilled = await self._backfill_copycat_trade_exposure(session)
             # Find unresolved BUY trades (SELL trades are inert execution records)
-            unresolved = session.query(Trade).filter(
+            unresolved_weather = session.query(Trade).filter(
                 Trade.action == "BUY",
                 Trade.resolved_correct.is_(None),
+                Trade.market_type != "copycat",
                 _is_executed_order(),
                 Trade.size > 0.0,
             ).all()
+            unresolved_copycat = session.query(Trade).filter(
+                Trade.action == "BUY",
+                Trade.resolved_correct.is_(None),
+                Trade.market_type == "copycat",
+                _is_executed_order(),
+                or_(Trade.size > 0.0, Trade.requested_size > 0.0),
+            ).all()
 
-            if not unresolved:
+            if not unresolved_weather and not unresolved_copycat:
                 return 0
 
-            log.info("resolving_trades", count=len(unresolved))
+            log.info(
+                "resolving_trades",
+                weather_count=len(unresolved_weather),
+                copycat_count=len(unresolved_copycat),
+                copycat_backfilled=backfilled,
+            )
 
-            for trade in unresolved:
+            for trade in unresolved_weather:
                 try:
                     if trade.market_type == "precipitation":
                         resolved = await self._resolve_precip(trade)
@@ -105,6 +145,14 @@ class TradeTracker:
                         resolved_count += 1
                 except Exception as e:
                     log.warning("resolve_error", trade_id=trade.id, error=str(e))
+
+            for trade in unresolved_copycat:
+                try:
+                    resolved = await self._resolve_copycat_trade(trade)
+                    if resolved:
+                        resolved_count += 1
+                except Exception as e:
+                    log.warning("copycat_resolve_error", trade_id=trade.id, error=str(e))
 
             session.commit()
         except Exception as e:
@@ -121,6 +169,8 @@ class TradeTracker:
 
     async def _resolve_single(self, trade: Trade) -> bool:
         """Attempt to resolve a single temperature trade via NOAA or Open-Meteo."""
+        if lookup_city is None or temp_hits_bucket is None:
+            return False
         station = lookup_city(trade.city)
         if station is None:
             return False
@@ -195,6 +245,8 @@ class TradeTracker:
         Accounts for partial exits: P&L is computed on remaining shares plus
         net profit from any SELL trades.
         """
+        if PreciseTemp is None or Precision is None or temp_hits_bucket is None:
+            return False
         unit = trade.bucket_unit or "C"
         resolved_temp = PreciseTemp(celsius=tmax_c, precision=Precision.WHOLE)
         match = temp_hits_bucket(resolved_temp, trade.bucket_type, trade.bucket_value, unit=unit)
@@ -206,11 +258,16 @@ class TradeTracker:
         fill = trade.fill_price or trade.price
 
         # Get sell summary to account for partial exits
-        session = get_session()
+        sell_session = object_session(trade)
+        owns_sell_session = False
+        if sell_session is None:
+            sell_session = get_session()
+            owns_sell_session = True
         try:
-            sold_shares, sell_proceeds, sell_fees = self._get_sell_summary(trade, session)
+            sold_shares, sell_proceeds, sell_fees = self._get_sell_summary(trade, sell_session)
         finally:
-            session.close()
+            if owns_sell_session:
+                sell_session.close()
 
         remaining_shares = trade.size - sold_shares
 
@@ -246,7 +303,7 @@ class TradeTracker:
 
     async def _resolve_precip(self, trade: Trade) -> bool:
         """Resolve a precipitation trade using NOAA monthly data."""
-        if self._noaa is None:
+        if self._noaa is None or lookup_ghcnd is None:
             return False
 
         # Parse market_date to get year/month (stored as "YYYY-MM-DD")
@@ -318,6 +375,326 @@ class TradeTracker:
         )
         return True
 
+    async def _resolve_copycat_trade(self, trade: Trade) -> bool:
+        """Resolve copycat BUY trade from Polymarket market outcome prices."""
+        market = await self._fetch_copycat_market(trade)
+        if market is None:
+            return False
+
+        if not self._market_is_finalized(market):
+            return False
+
+        outcome_price = self._copycat_outcome_price_for_token(market, trade.token_id)
+        if outcome_price is None or not self._is_binary_final_price(outcome_price):
+            return False
+
+        # For legacy rows without websocket fills, fall back to requested exposure.
+        if (trade.size or 0.0) <= 0 or (trade.cost or 0.0) <= 0:
+            status = (trade.order_status or "").upper()
+            if (
+                status in COPYCAT_FILLED_STATUSES
+                and (trade.requested_size or 0.0) > 0
+                and (trade.requested_cost or 0.0) > 0
+            ):
+                trade.size = float(trade.requested_size or 0.0)
+                trade.cost = float(trade.requested_cost or 0.0)
+                if not trade.fill_price and trade.size > 0:
+                    trade.fill_price = trade.cost / trade.size
+            else:
+                return False
+
+        won = outcome_price >= 0.999
+        trade.resolution_value = round(outcome_price, 6)
+        trade.resolved_correct = won
+        trade.resolved_at = datetime.utcnow()
+
+        fill = trade.fill_price or trade.price
+        if fill <= 0 and (trade.size or 0.0) > 0 and (trade.cost or 0.0) > 0:
+            fill = float(trade.cost) / float(trade.size)
+        if fill <= 0:
+            return False
+
+        # Get sell summary to account for partial exits
+        sell_session = object_session(trade)
+        owns_sell_session = False
+        if sell_session is None:
+            sell_session = get_session()
+            owns_sell_session = True
+        try:
+            sold_shares, sell_proceeds, sell_fees = self._get_sell_summary(trade, sell_session)
+        finally:
+            if owns_sell_session:
+                sell_session.close()
+
+        remaining_shares = (trade.size or 0.0) - sold_shares
+        if remaining_shares <= 0.01:
+            trade.pnl = sell_proceeds - sell_fees - (trade.cost or 0.0)
+        else:
+            if won:
+                remaining_pnl = (1.0 - fill) * remaining_shares
+            else:
+                remaining_pnl = -fill * remaining_shares
+            sell_net = sell_proceeds - sell_fees - (fill * sold_shares)
+            trade.pnl = remaining_pnl + sell_net
+
+        trade.fee_paid = float(trade.fee_paid or 0.0) + sell_fees
+
+        log.info(
+            "copycat_trade_resolved",
+            trade_id=trade.id,
+            condition_id=(trade.condition_id or "")[:16],
+            token_id=trade.token_id[:16],
+            order_status=trade.order_status,
+            won=won,
+            settlement_price=round(outcome_price, 4),
+            pnl=round(trade.pnl or 0.0, 2),
+            sold_shares=round(sold_shares, 2),
+            remaining=round(remaining_shares, 2),
+        )
+        return True
+
+    async def _backfill_copycat_trade_exposure(self, session) -> int:
+        """Backfill legacy zero-size copycat trades using wallet positions or requested notional."""
+        rows = session.query(Trade).filter(
+            Trade.action == "BUY",
+            Trade.market_type == "copycat",
+            Trade.resolved_correct.is_(None),
+            _is_executed_order(),
+            Trade.size <= 0.0,
+        ).all()
+        if not rows:
+            return 0
+
+        positions = await self._fetch_live_copy_positions_map()
+        backfilled = 0
+        for trade in rows:
+            shares = 0.0
+            cost = 0.0
+            fill = float(trade.fill_price or 0.0)
+            pos = positions.get((trade.token_id or "").strip())
+            if pos is not None and pos.get("size", 0.0) > 0:
+                shares = float(pos.get("size") or 0.0)
+                avg_price = float(pos.get("avg_price") or 0.0)
+                if avg_price > 0:
+                    fill = avg_price
+                if shares > 0 and fill > 0:
+                    cost = shares * fill
+
+            status = (trade.order_status or "").upper()
+            if (shares <= 0 or cost <= 0) and status in COPYCAT_FILLED_STATUSES:
+                req_size = float(trade.requested_size or 0.0)
+                req_cost = float(trade.requested_cost or 0.0)
+                if req_size > 0 and req_cost > 0:
+                    shares = req_size
+                    cost = req_cost
+                    if fill <= 0:
+                        fill = req_cost / req_size
+
+            if shares <= 0 or cost <= 0:
+                continue
+
+            changed = False
+            if abs((trade.size or 0.0) - shares) > 1e-8:
+                trade.size = round(shares, 8)
+                changed = True
+            if abs((trade.cost or 0.0) - cost) > 1e-8:
+                trade.cost = round(cost, 8)
+                changed = True
+            if fill > 0 and abs((trade.fill_price or 0.0) - fill) > 1e-8:
+                trade.fill_price = round(fill, 8)
+                changed = True
+            if changed:
+                backfilled += 1
+        return backfilled
+
+    async def _fetch_live_copy_positions_map(self) -> dict[str, dict[str, float]]:
+        wallet = self._funder_wallet
+        if not wallet:
+            return {}
+        try:
+            async with httpx.AsyncClient(
+                timeout=20.0,
+                headers={"User-Agent": "station-sniper", "Accept": "application/json"},
+            ) as client:
+                resp = await client.get(f"{DATA_API}/positions", params={"user": wallet})
+                resp.raise_for_status()
+                payload = resp.json()
+            if not isinstance(payload, list):
+                return {}
+            out: dict[str, dict[str, float]] = {}
+            for row in payload:
+                token_id = str(row.get("asset") or "").strip()
+                if not token_id:
+                    continue
+                size = float(row.get("size", 0) or 0.0)
+                if size <= 0:
+                    continue
+                avg_price = float(row.get("avgPrice", 0) or 0.0)
+                out[token_id] = {"size": size, "avg_price": avg_price}
+            return out
+        except Exception:
+            return {}
+
+    async def _fetch_copycat_market(self, trade: Trade) -> dict | None:
+        slug = (trade.event_id or "").strip()
+        if slug:
+            event = await self._fetch_gamma_event(
+                cache_key=f"event:{slug.lower()}",
+                params={"slug": slug, "limit": 1, "offset": 0},
+            )
+            market = self._select_market_from_event(event, trade)
+            if market is not None:
+                return market
+
+        # Fallback path: query by condition ID, but only accept result if token match is exact.
+        condition_id = (trade.condition_id or "").strip()
+        if condition_id:
+            market = await self._fetch_gamma_market(
+                cache_key=f"condition:{condition_id.lower()}",
+                params={"conditionId": condition_id, "limit": 1, "offset": 0},
+            )
+            if market is not None:
+                token_ids = self._market_token_ids(market)
+                if str(trade.token_id) in token_ids:
+                    return market
+        return None
+
+    async def _fetch_gamma_event(self, *, cache_key: str, params: dict) -> dict | None:
+        now = datetime.utcnow()
+        cached = self._copycat_market_cache.get(cache_key)
+        if cached is not None:
+            ts, payload = cached
+            if (now - ts).total_seconds() <= 120:
+                return payload
+        try:
+            async with httpx.AsyncClient(
+                timeout=20.0,
+                headers={"User-Agent": "station-sniper", "Accept": "application/json"},
+            ) as client:
+                resp = await client.get(f"{GAMMA_API}/events", params=params)
+                resp.raise_for_status()
+                payload = resp.json()
+            if isinstance(payload, list) and payload:
+                event = payload[0]
+                self._copycat_market_cache[cache_key] = (now, event)
+                return event
+        except Exception:
+            return None
+        return None
+
+    async def _fetch_gamma_market(self, *, cache_key: str, params: dict) -> dict | None:
+        now = datetime.utcnow()
+        cached = self._copycat_market_cache.get(cache_key)
+        if cached is not None:
+            ts, market = cached
+            if (now - ts).total_seconds() <= 120:
+                return market
+        try:
+            async with httpx.AsyncClient(
+                timeout=20.0,
+                headers={"User-Agent": "station-sniper", "Accept": "application/json"},
+            ) as client:
+                resp = await client.get(f"{GAMMA_API}/markets", params=params)
+                resp.raise_for_status()
+                payload = resp.json()
+            if isinstance(payload, list) and payload:
+                market = payload[0]
+                self._copycat_market_cache[cache_key] = (now, market)
+                return market
+        except Exception:
+            return None
+        return None
+
+    def _select_market_from_event(self, event: dict | None, trade: Trade) -> dict | None:
+        if not isinstance(event, dict):
+            return None
+        markets = event.get("markets")
+        if not isinstance(markets, list) or not markets:
+            return None
+
+        token = str(trade.token_id or "")
+        condition = str(trade.condition_id or "").lower()
+
+        for market in markets:
+            if not isinstance(market, dict):
+                continue
+            if token and token in self._market_token_ids(market):
+                return market
+
+        if condition:
+            for market in markets:
+                if not isinstance(market, dict):
+                    continue
+                market_condition = str(market.get("conditionId") or "").lower()
+                if market_condition and market_condition == condition:
+                    return market
+        return None
+
+    @staticmethod
+    def _market_token_ids(market: dict) -> list[str]:
+        return [str(x) for x in TradeTracker._parse_list_field(market.get("clobTokenIds"))]
+
+    @staticmethod
+    def _market_outcome_prices(market: dict) -> list[float]:
+        raw = TradeTracker._parse_list_field(market.get("outcomePrices"))
+        out: list[float] = []
+        for x in raw:
+            try:
+                out.append(float(x))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    @staticmethod
+    def _copycat_outcome_price_for_token(market: dict, token_id: str) -> float | None:
+        token_ids = TradeTracker._market_token_ids(market)
+        prices = TradeTracker._market_outcome_prices(market)
+        if not token_ids or not prices:
+            return None
+
+        try:
+            idx = token_ids.index(str(token_id))
+        except ValueError:
+            return None
+        if idx >= len(prices):
+            return None
+        price = prices[idx]
+        if price != price:  # NaN check
+            return None
+        return price
+
+    @staticmethod
+    def _parse_list_field(raw: object) -> list:
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, str):
+            s = raw.strip()
+            if not s:
+                return []
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+            return [p.strip() for p in s.split(",") if p.strip()]
+        return []
+
+    @staticmethod
+    def _is_binary_final_price(price: float) -> bool:
+        return price <= 0.001 or price >= 0.999
+
+    @staticmethod
+    def _market_is_finalized(market: dict) -> bool:
+        prices = TradeTracker._market_outcome_prices(market)
+        if not prices:
+            return False
+        hi = max(prices)
+        total = sum(max(0.0, p) for p in prices)
+        # Avoid unresolved stale shapes like [0, 0]. Settled binary/multi-outcome
+        # should have a winner near 1 and total probability mass near 1.
+        return hi >= 0.999 and total >= 0.99
+
     @staticmethod
     def _precip_bucket_hit(
         bucket_type: str,
@@ -348,7 +725,12 @@ class TradeTracker:
         stats.avg_roi = stats.total_pnl / total_cost if total_cost > 0 else 0.0
         return stats
 
-    def _resolved_query(self, session, lookback_days: int | None = None):
+    def _resolved_query(
+        self,
+        session,
+        lookback_days: int | None = None,
+        market_type: str | None = None,
+    ):
         """Build base query for resolved BUY trades with optional lookback."""
         query = session.query(Trade).filter(
             Trade.action == "BUY",
@@ -356,17 +738,24 @@ class TradeTracker:
             _is_executed_order(),
             Trade.size > 0.0,
         )
+        if market_type is not None:
+            query = query.filter(Trade.market_type == market_type)
         if lookback_days is not None:
             cutoff = datetime.utcnow().replace(hour=0, minute=0, second=0)
             cutoff -= timedelta(days=lookback_days)
             query = query.filter(Trade.resolved_at >= cutoff)
         return query
 
-    def get_stats(self, lookback_days: int | None = None) -> TradeStats:
+    def get_stats(
+        self,
+        lookback_days: int | None = None,
+        *,
+        market_type: str | None = None,
+    ) -> TradeStats:
         """Compute rolling trade statistics."""
         session = get_session()
         try:
-            trades = self._resolved_query(session, lookback_days).all()
+            trades = self._resolved_query(session, lookback_days, market_type=market_type).all()
             return self._compute_stats(trades)
         finally:
             session.close()

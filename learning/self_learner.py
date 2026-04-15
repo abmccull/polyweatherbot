@@ -157,6 +157,11 @@ class SelfLearner:
                     Trade.size > 0.0,
                     _is_executed_order(),
                 )
+                .filter(
+                    Trade.market_type == "copycat"
+                    if self._config.strategy_mode == "copycat"
+                    else Trade.market_type != "copycat"
+                )
                 .all()
             )
         finally:

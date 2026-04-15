@@ -105,6 +105,28 @@ def write_metrics_snapshot(
                 "shadow_max_bankroll_pct": config.shadow_max_bankroll_pct,
                 "shadow_min_expected_edge": config.shadow_min_expected_edge,
                 "shadow_min_expected_profit": config.shadow_min_expected_profit,
+                "shadow_exact_enabled": config.shadow_exact_enabled,
+                "shadow_exact_min_hour": config.shadow_exact_min_hour,
+                "shadow_exact_min_confidence": config.shadow_exact_min_confidence,
+                "shadow_exact_max_bet_usd": config.shadow_exact_max_bet_usd,
+                "adaptive_time_gates_enabled": config.adaptive_time_gates_enabled,
+                "adaptive_time_gate_no_emit_cycles": config.adaptive_time_gate_no_emit_cycles,
+                "adaptive_time_gate_step_hours": config.adaptive_time_gate_step_hours,
+                "adaptive_time_gate_min_geq_hour": config.adaptive_time_gate_min_geq_hour,
+                "adaptive_time_gate_min_leq_hour": config.adaptive_time_gate_min_leq_hour,
+                "liquidity_gate_enabled": config.liquidity_gate_enabled,
+                "liquidity_min_ask_depth_usd": config.liquidity_min_ask_depth_usd,
+                "liquidity_max_spread_abs": config.liquidity_max_spread_abs,
+                "liquidity_max_spread_pct_of_ask": config.liquidity_max_spread_pct_of_ask,
+                "passive_entry_enabled": config.passive_entry_enabled,
+                "passive_entry_min_spread_abs": config.passive_entry_min_spread_abs,
+                "passive_entry_join_ticks": config.passive_entry_join_ticks,
+                "signal_kpi_enabled": config.signal_kpi_enabled,
+                "signal_kpi_window_hours": config.signal_kpi_window_hours,
+                "signal_kpi_min_candidates": config.signal_kpi_min_candidates,
+                "signal_kpi_min_emitted": config.signal_kpi_min_emitted,
+                "signal_kpi_max_time_gate_ratio": config.signal_kpi_max_time_gate_ratio,
+                "signal_kpi_max_exact_ratio": config.signal_kpi_max_exact_ratio,
                 "hard_stop_loss_enabled": config.hard_stop_loss_enabled,
                 "hard_stop_loss_pct": config.hard_stop_loss_pct,
             },
@@ -152,3 +174,28 @@ def write_metrics_snapshot(
         log.debug("metrics_snapshot_written")
     except Exception as e:
         log.warning("metrics_snapshot_failed", error=str(e))
+
+
+def write_copy_metrics_snapshot(config: Config, snapshot: dict) -> None:
+    """Write copycat-mode metrics snapshot to metrics.json."""
+    payload = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "mode": "copycat",
+        "strategy_mode": config.strategy_mode,
+        **snapshot,
+    }
+    try:
+        dir_name = os.path.dirname(os.path.abspath(METRICS_FILE))
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(payload, f, indent=2)
+            os.replace(tmp_path, METRICS_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except Exception as e:
+        log.warning("copy_metrics_snapshot_failed", error=str(e))

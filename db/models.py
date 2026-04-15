@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase
 
@@ -188,4 +189,135 @@ class DailyPnL(Base):
     fees = Column(Float, nullable=False, default=0.0)
     net_pnl = Column(Float, nullable=False, default=0.0)
     portfolio_value = Column(Float, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class LeaderProfile(Base):
+    __tablename__ = "leader_profiles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    wallet = Column(String, nullable=False, unique=True, index=True)
+    name = Column(String, nullable=False)
+    tier = Column(String, nullable=True)
+    base_status = Column(String, nullable=False, default="core")  # core/probation/excluded
+    risk_multiplier = Column(Float, nullable=False, default=1.0)
+    enabled = Column(Boolean, nullable=False, default=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LeaderMetricsDaily(Base):
+    __tablename__ = "leader_metrics_daily"
+    __table_args__ = (
+        UniqueConstraint("wallet", "date", name="uq_leader_metrics_wallet_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    wallet = Column(String, nullable=False, index=True)
+    date = Column(String, nullable=False)  # YYYY-MM-DD UTC
+    trades_60d = Column(Integer, nullable=False, default=0)
+    active_days_60d = Column(Integer, nullable=False, default=0)
+    activity_truncated = Column(Boolean, nullable=False, default=False)
+    recent_active_ok = Column(Boolean, nullable=False, default=False)
+    week_sports_pnl = Column(Float, nullable=True)
+    month_sports_pnl = Column(Float, nullable=True)
+    week_global_pnl = Column(Float, nullable=True)
+    month_global_pnl = Column(Float, nullable=True)
+    recent_success_ok = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class LeaderEligibilityDecision(Base):
+    __tablename__ = "leader_eligibility_decisions"
+    __table_args__ = (
+        UniqueConstraint("wallet", "date", name="uq_leader_eligibility_wallet_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    wallet = Column(String, nullable=False, index=True)
+    date = Column(String, nullable=False)  # YYYY-MM-DD UTC
+    status = Column(String, nullable=False)  # core/probation/excluded
+    eligible = Column(Boolean, nullable=False, default=False)
+    reason = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CopySignalEvent(Base):
+    __tablename__ = "copy_signal_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    leader_wallet = Column(String, nullable=False, index=True)
+    leader_name = Column(String, nullable=True)
+    transaction_hash = Column(String, nullable=False, unique=True, index=True)
+    side = Column(String, nullable=False)
+    outcome = Column(String, nullable=True)
+    token_id = Column(String, nullable=False, index=True)
+    condition_id = Column(String, nullable=True, index=True)
+    event_slug = Column(String, nullable=True, index=True)
+    match_key = Column(String, nullable=False, index=True)
+    leader_price = Column(Float, nullable=False)
+    leader_size = Column(Float, nullable=False, default=0.0)
+    event_title = Column(String, nullable=True)
+    event_end = Column(DateTime, nullable=True)
+    status = Column(String, nullable=False)  # accepted/skipped/error
+    reason = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CopyOrderIntent(Base):
+    __tablename__ = "copy_order_intents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    signal_event_id = Column(Integer, nullable=True, index=True)
+    leader_wallet = Column(String, nullable=False, index=True)
+    match_key = Column(String, nullable=False, index=True)
+    condition_id = Column(String, nullable=True, index=True)
+    event_slug = Column(String, nullable=True)
+    token_id = Column(String, nullable=False, index=True)
+    side = Column(String, nullable=False, default="BUY")
+    outcome = Column(String, nullable=True)
+    requested_price = Column(Float, nullable=True)
+    max_copy_price = Column(Float, nullable=True)
+    selected_price = Column(Float, nullable=True)
+    size_usd = Column(Float, nullable=False, default=0.0)
+    shares = Column(Float, nullable=False, default=0.0)
+    order_id = Column(String, nullable=True, index=True)
+    order_status = Column(String, nullable=True)
+    status = Column(String, nullable=False)  # accepted/skipped/placed/failed/dry_run
+    reason = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CopyPositionLock(Base):
+    __tablename__ = "copy_position_locks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_key = Column(String, nullable=False, unique=True, index=True)
+    condition_id = Column(String, nullable=True, index=True)
+    event_slug = Column(String, nullable=True)
+    token_id = Column(String, nullable=False)
+    side = Column(String, nullable=False)
+    outcome = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="OPEN")  # OPEN/CLOSED
+    opened_by_wallet = Column(String, nullable=True, index=True)
+    last_signal_tx = Column(String, nullable=True)
+    opened_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    closed_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class RedemptionEvent(Base):
+    __tablename__ = "redemption_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    condition_id = Column(String, nullable=False, index=True)
+    title = Column(String, nullable=True)
+    outcome = Column(String, nullable=True)
+    size = Column(Float, nullable=False, default=0.0)
+    status = Column(String, nullable=False)  # REDEEMED/FAILED
+    tx_hash = Column(String, nullable=True, index=True)
+    usdc_balance_after = Column(Float, nullable=True)
+    error = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

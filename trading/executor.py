@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 from config import Config
 from db.engine import get_session
 from db.models import Trade
-from signals.detector import TradeSignal
 from trading.portfolio import Portfolio
 from trading.sizing import compute_size, compute_size_kelly
 from utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from signals.detector import TradeSignal
+else:
+    TradeSignal = Any
 
 log = get_logger("executor")
 
@@ -85,10 +90,10 @@ class TradeExecutor:
         5. Record trade in DB
         """
         # Determine price
-        price = signal.best_ask
-        if price is None:
+        if signal.best_ask is None:
             log.warning("no_ask_price", token_id=signal.token_id, city=signal.city)
             return None
+        price = self._select_entry_price(signal)
         win_probability = signal.win_probability if signal.win_probability is not None else signal.confidence.total
         win_probability = max(0.0, min(1.0, win_probability))
 
@@ -281,6 +286,130 @@ class TradeExecutor:
         except Exception as e:
             session.rollback()
             log.error("trade_db_save_failed", error=str(e))
+            return None
+        finally:
+            session.close()
+
+    async def execute_copy_order(
+        self,
+        *,
+        token_id: str,
+        condition_id: str | None,
+        event_id: str,
+        event_slug: str | None,
+        event_title: str | None,
+        market_date: str,
+        leader_wallet: str,
+        match_key: str,
+        outcome: str | None,
+        leader_price: float,
+        max_copy_price: float,
+        size_usd: float,
+    ) -> Trade | None:
+        """Place a copycat BUY order and persist a trade audit row.
+
+        This path is intentionally isolated from weather-specific signal fields.
+        """
+        if size_usd <= 0:
+            return None
+
+        best_bid, best_ask, _, _ = self.refresh_prices(token_id)
+        if best_ask is None:
+            log.info("copy_order_blocked_no_ask", token_id=token_id, match_key=match_key)
+            return None
+
+        price = self._select_price_from_book(best_ask, best_bid)
+        if price <= 0:
+            return None
+        if price > max_copy_price:
+            log.info(
+                "copy_order_blocked_slippage_cap",
+                token_id=token_id,
+                match_key=match_key,
+                ask=round(price, 4),
+                max_copy_price=round(max_copy_price, 4),
+                leader_price=round(leader_price, 4),
+            )
+            return None
+
+        shares = size_usd / price
+        trade = Trade(
+            event_id=event_id,
+            condition_id=condition_id,
+            city=(event_title or event_slug or "copycat")[:120],
+            market_date=market_date,
+            icao_station="COPY",
+            bucket_value=0,
+            bucket_type="copy",
+            bucket_unit="",
+            token_id=token_id,
+            market_type="copycat",
+            action="BUY",
+            requested_size=shares,
+            requested_cost=size_usd,
+            price=price,
+            size=shares,
+            cost=size_usd,
+            confidence=1.0,
+            expected_slippage=max(0.0, price - leader_price),
+            expected_profit=None,
+            expected_edge=None,
+            calibrated_probability=None,
+            metar_temp_c=None,
+            metar_precision=None,
+            wu_displayed_high=None,
+            margin_from_boundary=None,
+            local_hour=None,
+        )
+
+        if self._config.dry_run:
+            trade.order_status = "DRY_RUN"
+            log.info(
+                "copy_dry_run_trade",
+                leader_wallet=leader_wallet,
+                match_key=match_key,
+                token_id=token_id,
+                price=round(price, 4),
+                size_usd=round(size_usd, 2),
+                shares=round(shares, 3),
+            )
+        else:
+            order_result = self._place_order(token_id, price, shares)
+            if order_result:
+                trade.order_id = order_result.get("orderID", "")
+                trade.order_status = order_result.get("status", "UNKNOWN")
+                fill_price = self._to_float(order_result.get("fillPrice"))
+                filled_size = self._to_float(
+                    order_result.get("filledSize")
+                    or order_result.get("sizeMatched")
+                    or order_result.get("matchedSize")
+                )
+                if filled_size and filled_size > 0:
+                    px = fill_price or price
+                    trade.size = filled_size
+                    trade.cost = filled_size * px
+                    trade.fill_price = px
+                elif fill_price is not None and (trade.order_status or "").upper() in ("FILLED", "MATCHED"):
+                    trade.size = shares
+                    trade.cost = shares * fill_price
+                    trade.fill_price = fill_price
+                elif trade.size > 0 and trade.cost > 0 and trade.fill_price is None:
+                    trade.fill_price = trade.cost / trade.size
+            else:
+                trade.order_status = "FAILED"
+                trade.size = 0.0
+                trade.cost = 0.0
+                log.error("copy_order_failed", token_id=token_id, match_key=match_key)
+
+        session = get_session()
+        try:
+            session.add(trade)
+            session.commit()
+            session.refresh(trade)
+            return trade if trade.order_status != "FAILED" else None
+        except Exception as e:
+            session.rollback()
+            log.error("copy_trade_db_save_failed", error=str(e))
             return None
         finally:
             session.close()
@@ -517,6 +646,9 @@ class TradeExecutor:
         cap_abs = max(self._config.min_bet, self._config.shadow_max_bet_usd)
         cap_pct = max(self._config.min_bet, portfolio_value * self._config.shadow_max_bankroll_pct)
         cap = min(cap_abs, cap_pct)
+        if signal.bucket_type == "exact" and self._config.shadow_exact_enabled:
+            exact_cap = max(self._config.min_bet, self._config.shadow_exact_max_bet_usd)
+            cap = min(cap, exact_cap)
         if size_usd > cap:
             log.info(
                 "shadow_size_capped",
@@ -526,9 +658,58 @@ class TradeExecutor:
                 capped_size=round(cap, 2),
                 cap_abs=round(cap_abs, 2),
                 cap_pct=round(cap_pct, 2),
+                exact_bucket=signal.bucket_type == "exact",
             )
             return cap
         return size_usd
+
+    def _select_entry_price(self, signal: TradeSignal) -> float:
+        """Pick execution price; join near bid on wide spreads when enabled."""
+        ask = signal.best_ask
+        if ask is None:
+            return 0.0
+        if not self._config.passive_entry_enabled:
+            return ask
+        if signal.best_bid is None:
+            return ask
+
+        spread = ask - signal.best_bid
+        if spread < self._config.passive_entry_min_spread_abs:
+            return ask
+
+        tick = max(0.0001, self._config.passive_entry_tick_size)
+        join_ticks = max(1, int(self._config.passive_entry_join_ticks))
+        improved = min(ask, signal.best_bid + (join_ticks * tick))
+        # Round to tick grid for cleaner limit prices.
+        improved = round(improved / tick) * tick
+        if improved <= 0:
+            return ask
+        if improved < ask:
+            log.info(
+                "passive_entry_price_improved",
+                token_id=signal.token_id,
+                city=signal.city,
+                ask=round(ask, 4),
+                bid=round(signal.best_bid, 4),
+                selected=round(improved, 4),
+                spread=round(spread, 4),
+            )
+        return min(ask, improved)
+
+    def _select_price_from_book(self, ask: float, bid: float | None) -> float:
+        """Select limit price from raw order-book inputs."""
+        if ask <= 0:
+            return 0.0
+        if not self._config.passive_entry_enabled or bid is None:
+            return ask
+        spread = ask - bid
+        if spread < self._config.passive_entry_min_spread_abs:
+            return ask
+        tick = max(0.0001, self._config.passive_entry_tick_size)
+        join_ticks = max(1, int(self._config.passive_entry_join_ticks))
+        improved = min(ask, bid + (join_ticks * tick))
+        improved = round(improved / tick) * tick
+        return min(ask, improved) if improved > 0 else ask
 
     def get_order_book(self, token_id: str) -> dict | None:
         """Fetch order book for a token. Returns {bids, asks} with depth."""

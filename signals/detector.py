@@ -83,6 +83,10 @@ class SignalDetector:
         self._self_learner = self_learner
         # Track which signals we've already emitted to avoid duplicates
         self._emitted: set[str] = set()
+        # Adaptive gate relaxation state (in-memory, resets on restart).
+        self._no_emit_cycles = 0
+        self._adaptive_geq_relax_hours = 0
+        self._adaptive_leq_relax_hours = 0
 
     async def detect(self) -> list[TradeSignal]:
         """Scan all active markets and detect trade signals."""
@@ -112,6 +116,8 @@ class SignalDetector:
 
         if candidates:
             self._persist_candidates(candidates)
+
+        self._update_adaptive_time_gates(emitted_count=len(signals))
 
         if signals:
             log.info("signals_detected", count=len(signals))
@@ -181,23 +187,27 @@ class SignalDetector:
                 continue
 
             # ── Gate 4a: Skip "exact" buckets ─────────────────────────
-            # Exact buckets are unreliable for latency arb (narrow window,
-            # rounding uncertainty makes them near-random).
             if bucket.bucket_type == "exact":
-                candidates.append(self._build_candidate(
-                    market=market,
-                    bucket_type=bucket.bucket_type,
-                    bucket_value=bucket.bucket_value,
-                    unit=bucket.unit,
-                    token_id=bucket_data.token_id,
-                    metar_temp_c=temp.celsius,
-                    metar_precision=temp.precision.value,
-                    metar_age_minutes=metar_age_minutes,
+                exact_allowed, exact_reason = self._exact_bucket_allowed(
                     local_hour_val=hour,
-                    status="SKIP_EXACT",
-                    reason="exact_bucket",
-                ))
-                continue
+                    metar_precision=temp.precision.value,
+                )
+                if not exact_allowed:
+                    status = "SKIP_EXACT" if exact_reason == "exact_disabled" else "EXACT_BLOCKED"
+                    candidates.append(self._build_candidate(
+                        market=market,
+                        bucket_type=bucket.bucket_type,
+                        bucket_value=bucket.bucket_value,
+                        unit=bucket.unit,
+                        token_id=bucket_data.token_id,
+                        metar_temp_c=temp.celsius,
+                        metar_precision=temp.precision.value,
+                        metar_age_minutes=metar_age_minutes,
+                        local_hour_val=hour,
+                        status=status,
+                        reason=exact_reason,
+                    ))
+                    continue
 
             # ── Gate 4b: Directional time-of-day gating ──────────────
             if bucket.bucket_type == "geq":
@@ -351,6 +361,33 @@ class SignalDetector:
                 ))
                 continue
 
+            # ── Gate 6b: Liquidity quality ────────────────────────────
+            liquidity_ok, liquidity_reason = self._passes_liquidity_gate(
+                best_bid=best_bid,
+                best_ask=best_ask,
+                ask_depth=ask_depth,
+            )
+            if not liquidity_ok:
+                candidates.append(self._build_candidate(
+                    market=market,
+                    bucket_type=bucket.bucket_type,
+                    bucket_value=bucket.bucket_value,
+                    unit=bucket.unit,
+                    token_id=bucket_data.token_id,
+                    metar_temp_c=temp.celsius,
+                    metar_precision=temp.precision.value,
+                    metar_age_minutes=metar_age_minutes,
+                    local_hour_val=hour,
+                    matched_bucket=True,
+                    best_bid=best_bid,
+                    best_ask=best_ask,
+                    bid_depth=bid_depth,
+                    ask_depth=ask_depth,
+                    status="LIQUIDITY_BLOCKED",
+                    reason=liquidity_reason,
+                ))
+                continue
+
             # ── Gate 7: Confidence scoring ────────────────────────────
             peak = is_peak_heating(market.timezone)
 
@@ -401,13 +438,17 @@ class SignalDetector:
                     context=context_signal,
                 )
 
-            if confidence.total < min_confidence:
+            bucket_min_confidence = self._bucket_min_confidence(
+                bucket_type=bucket.bucket_type,
+                base_min_confidence=min_confidence,
+            )
+            if confidence.total < bucket_min_confidence:
                 log.debug(
                     "signal_below_threshold",
                     city=market.info.city,
                     bucket=f"{bucket.bucket_type}:{bucket.bucket_value}{bucket.unit}",
                     confidence=round(confidence.total, 3),
-                    threshold=min_confidence,
+                    threshold=bucket_min_confidence,
                     breakdown={
                         "base": round(confidence.base, 3),
                         "precision": round(confidence.precision_bonus, 3),
@@ -433,7 +474,11 @@ class SignalDetector:
                     confidence=confidence,
                     calibrated_probability=win_probability,
                     status="CONFIDENCE_BLOCKED",
-                    reason="below_min_confidence",
+                    reason=(
+                        "below_exact_min_confidence"
+                        if bucket.bucket_type == "exact"
+                        else "below_min_confidence"
+                    ),
                 ))
                 continue
 
@@ -586,6 +631,16 @@ class SignalDetector:
             geq_min_hour = min(geq_min_hour, self._config.shadow_geq_min_hour)
             leq_min_hour = min(leq_min_hour, self._config.shadow_leq_min_hour)
 
+        if self._config.adaptive_time_gates_enabled:
+            geq_min_hour = max(
+                self._config.adaptive_time_gate_min_geq_hour,
+                geq_min_hour - max(0, self._adaptive_geq_relax_hours),
+            )
+            leq_min_hour = max(
+                self._config.adaptive_time_gate_min_leq_hour,
+                leq_min_hour - max(0, self._adaptive_leq_relax_hours),
+            )
+
         return (
             min_price,
             max_price,
@@ -594,3 +649,90 @@ class SignalDetector:
             geq_min_hour,
             leq_min_hour,
         )
+
+    def _exact_bucket_allowed(self, local_hour_val: int, metar_precision: str | None) -> tuple[bool, str]:
+        """Gate exact buckets to controlled shadow pilot conditions."""
+        if not self._config.shadow_expansion_enabled or not self._config.shadow_exact_enabled:
+            return False, "exact_disabled"
+        if local_hour_val < self._config.shadow_exact_min_hour:
+            return False, f"exact_before_{self._config.shadow_exact_min_hour}"
+        if metar_precision != "tenths":
+            return False, "exact_requires_tenths_precision"
+        return True, "exact_shadow_enabled"
+
+    def _bucket_min_confidence(self, bucket_type: str, base_min_confidence: float) -> float:
+        """Use stricter confidence threshold for exact-bucket shadow pilot."""
+        if bucket_type == "exact" and self._config.shadow_exact_enabled:
+            return max(base_min_confidence, self._config.shadow_exact_min_confidence)
+        return base_min_confidence
+
+    def _passes_liquidity_gate(
+        self,
+        best_bid: float | None,
+        best_ask: float,
+        ask_depth: float,
+    ) -> tuple[bool, str]:
+        """Reject low-quality books with shallow asks or very wide spreads."""
+        if not self._config.liquidity_gate_enabled:
+            return True, "liquidity_gate_disabled"
+
+        if ask_depth < self._config.liquidity_min_ask_depth_usd:
+            return False, "ask_depth_below_min"
+        if best_bid is None:
+            return False, "missing_best_bid"
+
+        spread = best_ask - best_bid
+        if spread < 0:
+            return False, "inverted_spread"
+        if spread > self._config.liquidity_max_spread_abs:
+            return False, "spread_above_abs_limit"
+        if best_ask > 0 and (spread / best_ask) > self._config.liquidity_max_spread_pct_of_ask:
+            return False, "spread_above_pct_limit"
+        return True, "liquidity_ok"
+
+    def _update_adaptive_time_gates(self, emitted_count: int) -> None:
+        """Adaptively relax directional time gates when opportunity flow is starved."""
+        if not self._config.adaptive_time_gates_enabled:
+            return
+
+        if emitted_count > 0:
+            self._no_emit_cycles = 0
+            if (
+                self._config.adaptive_time_gate_reset_on_emit
+                and (self._adaptive_geq_relax_hours > 0 or self._adaptive_leq_relax_hours > 0)
+            ):
+                self._adaptive_geq_relax_hours = 0
+                self._adaptive_leq_relax_hours = 0
+                log.info("adaptive_time_gates_reset")
+            return
+
+        self._no_emit_cycles += 1
+        threshold = max(1, int(self._config.adaptive_time_gate_no_emit_cycles))
+        if self._no_emit_cycles < threshold:
+            return
+
+        self._no_emit_cycles = 0
+        step = max(1, int(self._config.adaptive_time_gate_step_hours))
+
+        base_geq = self._config.geq_min_hour
+        base_leq = self._config.leq_min_hour
+        if self._config.shadow_expansion_enabled:
+            base_geq = min(base_geq, self._config.shadow_geq_min_hour)
+            base_leq = min(base_leq, self._config.shadow_leq_min_hour)
+
+        max_geq_relax = max(0, base_geq - self._config.adaptive_time_gate_min_geq_hour)
+        max_leq_relax = max(0, base_leq - self._config.adaptive_time_gate_min_leq_hour)
+
+        prev_geq = self._adaptive_geq_relax_hours
+        prev_leq = self._adaptive_leq_relax_hours
+        self._adaptive_geq_relax_hours = min(max_geq_relax, prev_geq + step)
+        self._adaptive_leq_relax_hours = min(max_leq_relax, prev_leq + step)
+
+        if self._adaptive_geq_relax_hours != prev_geq or self._adaptive_leq_relax_hours != prev_leq:
+            log.info(
+                "adaptive_time_gates_relaxed",
+                geq_relax_hours=self._adaptive_geq_relax_hours,
+                leq_relax_hours=self._adaptive_leq_relax_hours,
+                geq_active_hour=max(base_geq - self._adaptive_geq_relax_hours, self._config.adaptive_time_gate_min_geq_hour),
+                leq_active_hour=max(base_leq - self._adaptive_leq_relax_hours, self._config.adaptive_time_gate_min_leq_hour),
+            )

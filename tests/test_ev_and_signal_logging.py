@@ -21,7 +21,13 @@ from weather.metar_feed import DailyHigh
 from weather.temperature import PreciseTemp, Precision
 
 
-def _signal(price: float, q: float, best_bid: float | None = None, ask_depth: float = 1000.0) -> TradeSignal:
+def _signal(
+    price: float,
+    q: float,
+    best_bid: float | None = None,
+    ask_depth: float = 1000.0,
+    bucket_type: str = "geq",
+) -> TradeSignal:
     return TradeSignal(
         event_id="evt1",
         condition_id="cond1",
@@ -29,7 +35,7 @@ def _signal(price: float, q: float, best_bid: float | None = None, ask_depth: fl
         market_date=date(2026, 2, 24),
         icao_station="KORD",
         token_id="tok1",
-        bucket_type="geq",
+        bucket_type=bucket_type,
         bucket_value=30,
         unit="F",
         market_type="temperature",
@@ -203,6 +209,53 @@ async def test_shadow_mode_uses_stricter_ev_thresholds(db_session):
 
 
 @pytest.mark.asyncio
+async def test_shadow_exact_bucket_has_tighter_size_cap(db_session):
+    cfg = Config(
+        dry_run=True,
+        initial_bankroll=1000.0,
+        kelly_mode=False,
+        enable_ev_gate=True,
+        min_expected_edge=0.01,
+        min_expected_profit=0.01,
+        shadow_expansion_enabled=True,
+        shadow_max_bet_usd=25.0,
+        shadow_max_bankroll_pct=0.05,
+        shadow_exact_enabled=True,
+        shadow_exact_max_bet_usd=5.0,
+    )
+    portfolio = Portfolio(cfg)
+    executor = TradeExecutor(cfg, portfolio, tracker=None)
+
+    sig = _signal(price=0.40, q=0.95, best_bid=0.39, ask_depth=1000.0, bucket_type="exact")
+    trade = await executor.execute(sig)
+    assert trade is not None
+    assert trade.cost <= 5.0 + 1e-9
+
+
+@pytest.mark.asyncio
+async def test_passive_entry_improves_price_on_wide_spread(db_session):
+    cfg = Config(
+        dry_run=True,
+        initial_bankroll=1000.0,
+        kelly_mode=False,
+        enable_ev_gate=True,
+        min_expected_edge=0.01,
+        min_expected_profit=0.01,
+        passive_entry_enabled=True,
+        passive_entry_min_spread_abs=0.02,
+        passive_entry_join_ticks=1,
+        passive_entry_tick_size=0.01,
+    )
+    portfolio = Portfolio(cfg)
+    executor = TradeExecutor(cfg, portfolio, tracker=None)
+
+    sig = _signal(price=0.50, q=0.95, best_bid=0.40, ask_depth=1000.0)
+    trade = await executor.execute(sig)
+    assert trade is not None
+    assert trade.price == pytest.approx(0.41, abs=1e-9)
+
+
+@pytest.mark.asyncio
 async def test_detector_persists_signal_candidates(db_session, monkeypatch):
     @dataclass
     class _Bucket:
@@ -271,6 +324,73 @@ async def test_detector_persists_signal_candidates(db_session, monkeypatch):
     assert statuses["tok_low_conf"] in {"BUCKET_MISS", "CONFIDENCE_BLOCKED"}
     emitted = [r for r in rows if r.token_id == "tok_emit"][0]
     assert emitted.calibrated_probability is not None
+
+
+@pytest.mark.asyncio
+async def test_detector_liquidity_gate_blocks_shallow_books(db_session, monkeypatch):
+    @dataclass
+    class _Bucket:
+        bucket_type: str
+        bucket_value: int
+        unit: str
+
+    @dataclass
+    class _BucketData:
+        token_id: str
+        condition_id: str
+        bucket: _Bucket
+
+    market = SimpleNamespace(
+        event_id="evt_liq",
+        icao="KORD",
+        timezone="America/Chicago",
+        market_type="temperature",
+        info=SimpleNamespace(city="Chicago", market_date=date(2026, 2, 24)),
+        buckets=[
+            _BucketData(token_id="tok_liq", condition_id="c_liq", bucket=_Bucket("geq", 68, "F")),
+        ],
+    )
+    active = SimpleNamespace(
+        market=market,
+        bucket_prices={
+            "tok_liq": SimpleNamespace(best_bid=0.41, best_ask=0.43, bid_depth=200.0, ask_depth=20.0),
+        },
+    )
+
+    class _Registry:
+        def get_all_active(self):
+            return [active]
+
+    class _Metar:
+        def get_daily_high(self, _icao):
+            dh = DailyHigh(station="KORD", date=date(2026, 2, 24))
+            dh.high = PreciseTemp(celsius=20.0, precision=Precision.TENTHS)
+            dh.last_obs_time = datetime.utcnow().replace(tzinfo=pytz.utc)
+            return dh
+
+    cfg = Config(
+        dry_run=True,
+        min_price=0.30,
+        geq_min_hour=0,
+        liquidity_gate_enabled=True,
+        liquidity_min_ask_depth_usd=40.0,
+    )
+    cfg.min_confidence.value = 0.70
+    monkeypatch.setattr("signals.detector.local_hour", lambda _tz: 14)
+    monkeypatch.setattr("signals.detector.is_peak_heating", lambda _tz: True)
+
+    detector = SignalDetector(cfg, _Metar(), _Registry(), tracker=None, calibrator=None)
+    signals = await detector.detect()
+    assert signals == []
+
+    s = get_session()
+    try:
+        row = s.query(SignalCandidate).filter(SignalCandidate.event_id == "evt_liq").first()
+    finally:
+        s.close()
+    assert row is not None
+    assert row.status == "LIQUIDITY_BLOCKED"
+    assert row.reason == "ask_depth_below_min"
 
 
 @pytest.mark.asyncio
